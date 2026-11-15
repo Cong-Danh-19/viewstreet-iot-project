@@ -14,20 +14,22 @@ const io = new Server(server);
 // Phục vụ giao diện tĩnh từ thư mục frontend
 app.use(express.static('frontend'));
 
-// Lắng nghe dữ liệu từ Adafruit IO MQTT Client
+// Lắng nghe dữ liệu thực tế từ Adafruit IO MQTT Client
 client.on('message', (topic, message) => {
     const payloadStr = message.toString();
 
     if (topic === FEEDS.TELEMETRY) {
         try {
             const data = JSON.parse(payloadStr);
-            const currentState = stateManager.updateNode1(data);
+            
+            // Cập nhật trạng thái Node 1 và tự động ghi vào history.json
+            const { networkState, newRecord } = stateManager.updateNode1(data);
             
             // Tính toán định tuyến cân bằng tải
-            const routingInfo = routingService.evaluateRoutes(currentState);
+            const routingInfo = routingService.evaluateRoutes(networkState);
             
-            // Phát tán xuống toàn bộ Web Client qua WebSocket
-            io.emit('state_update', { currentState, routingInfo });
+            // Phát tán dữ liệu thật kèm bản ghi lịch sử mới xuống WebSocket
+            io.emit('state_update', { currentState: networkState, routingInfo, newRecord });
         } catch (e) {
             console.error('[JSON Parse Error]:', e.message);
         }
@@ -36,26 +38,21 @@ client.on('message', (topic, message) => {
     }
 });
 
-// Xử lý sự kiện WebSocket từ Web Dashboard
+// Xử lý kết nối WebSocket từ Client
 io.on('connection', (socket) => {
     console.log('[WebSocket] Client đã kết nối:', socket.id);
     
-    // Gửi state ban đầu
+    // Gửi trạng thái hiện tại, định tuyến và toàn bộ lịch sử cũ từ file JSON cho client
     const currentState = stateManager.getState();
     const routingInfo = routingService.evaluateRoutes(currentState);
-    socket.emit('state_update', { currentState, routingInfo });
+    const history = stateManager.getHistory();
+    
+    socket.emit('init_dashboard', { currentState, routingInfo, history });
 
     // Nhận lệnh điều khiển từ web -> Publish lên Adafruit IO xuống ESP32
     socket.on('cmd_hardware', (cmdObj) => {
         console.log('[Web Control -> Adafruit]:', cmdObj);
         client.publish(FEEDS.CONTROL, JSON.stringify(cmdObj));
-    });
-
-    // Giả lập lỗi node trên giao diện
-    socket.on('toggle_sim_node', (nodeId) => {
-        const currentState = stateManager.toggleNodeSim(nodeId);
-        const routingInfo = routingService.evaluateRoutes(currentState);
-        io.emit('state_update', { currentState, routingInfo });
     });
 });
 
