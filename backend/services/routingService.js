@@ -1,19 +1,60 @@
-const defaultConfig = require('./routingService.config');
+const fs = require('fs');
+const path = require('path');
+
+const LINKS_FILE = path.join(__dirname, '../data/links.json');
+
+const DEFAULT_LINKS = [
+    ['node_1', 'gateway'],
+    ['node_1', 'node_2'],
+    ['node_1', 'node_3'],
+    ['node_2', 'gateway'],
+    ['node_3', 'gateway'],
+    ['node_2', 'node_3'],
+    ['node_3', 'node_2'],
+];
+
+function loadLinks() {
+    try {
+        const parsed = JSON.parse(fs.readFileSync(LINKS_FILE, 'utf8'));
+        if (Array.isArray(parsed) && parsed.length) return parsed;
+    } catch (e) { /* chưa có file links.json thì dùng mặc định */ }
+    return DEFAULT_LINKS;
+}
+
+const defaultConfig = {
+    weights: { hop: 1.0, battery: 2.0, rssi: 1.5, load: 1.0 },
+    rssi: { good: -30, bad: -100 },
+    defaults: { bat: 50, rssi: -85, load: 50 },
+    gateway: 'gateway',
+    autoDirectToGateway: false, // Tắt nối thẳng gateway để test định tuyến qua node trung gian
+    links: loadLinks(),
+    unreachableCost: Infinity,
+};
+
+defaultConfig.setLinks = function (newLinks) {
+    if (!Array.isArray(newLinks)) return false;
+    const valid = newLinks.filter(
+        (pair) =>
+            Array.isArray(pair) &&
+            pair.length === 2 &&
+            typeof pair[0] === 'string' &&
+            typeof pair[1] === 'string' &&
+            pair[0] !== pair[1]
+    );
+    defaultConfig.links = valid;
+    fs.mkdirSync(path.dirname(LINKS_FILE), { recursive: true });
+    fs.writeFileSync(LINKS_FILE, JSON.stringify(valid, null, 2), 'utf8');
+    return true;
+};
 
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
 const num = (v, fallback) => (Number.isFinite(v) ? v : fallback);
 
-/** Chất lượng liên kết [0,1] từ RSSI (dBm). Chấp nhận cả dạng âm (-70) lẫn độ lớn (70). */
 function rssiQuality(rssi, cfg) {
     const dbm = -Math.abs(num(rssi, cfg.defaults.rssi));
     return clamp01((dbm - cfg.rssi.bad) / (cfg.rssi.good - cfg.rssi.bad));
 }
 
-/**
- * Cost của MỘT đoạn tới `node` (node nhận). Giữ chữ ký cũ để tương thích:
- * calculateCost(node, hops) vẫn dùng được; hops mặc định 1 = một đoạn.
- * `rssi` là RSSI của liên kết (mặc định lấy node.rssi).
- */
 function calculateCost(node, hops = 1, { config = defaultConfig, rssi, isGateway = false } = {}) {
     const w = config.weights;
     const n = node || {};
@@ -28,12 +69,23 @@ function calculateCost(node, hops = 1, { config = defaultConfig, rssi, isGateway
     return Math.round(cost * 1000) / 1000;
 }
 
-/** Dựng đồ thị có trọng số từ state; bỏ node offline và các node trong `excluded`. */
+function effectiveLinks(state, config) {
+    const gw = config.gateway;
+    const links = [...config.links];
+    if (config.autoDirectToGateway === false) return links;
+    const hasDirect = new Set(links.filter(([, to]) => to === gw).map(([from]) => from));
+    for (const id of Object.keys(state)) {
+        if (id === 'links' || id === gw || hasDirect.has(id)) continue;
+        links.push([id, gw]);
+    }
+    return links;
+}
+
 function buildGraph(state, config, excluded = new Set()) {
     const gw = config.gateway;
     const alive = (id) => id === gw || (state[id] && state[id].online && !excluded.has(id));
     const graph = new Map();
-    for (const [from, to] of config.links) {
+    for (const [from, to] of effectiveLinks(state, config)) {
         if (!alive(from) || !alive(to) || from === gw) continue;
         const linkRssi = state.links && state.links[`${from}->${to}`]
             ? state.links[`${from}->${to}`].rssi
@@ -48,7 +100,6 @@ function buildGraph(state, config, excluded = new Set()) {
     return graph;
 }
 
-/** Dijkstra (đồ thị nhỏ nên dùng quét tuyến tính thay vì heap). */
 function dijkstra(graph, source, target) {
     const dist = new Map([[source, 0]]);
     const prev = new Map();
@@ -79,13 +130,6 @@ function dijkstra(graph, source, target) {
 
 const round = (x) => (Number.isFinite(x) ? Math.round(x * 1000) / 1000 : x);
 
-/**
- * Đánh giá tuyến từ `source` tới gateway.
- * Trả về:
- *  - optimalPath / totalCost / optimalRoute: tuyến tốt nhất
- *  - alternatives: tốt nhất theo từng hop đầu tiên (để so sánh, hiển thị dashboard)
- *  - costViaNode2 / costViaNode3: giữ lại để tương thích code cũ
- */
 function evaluateRoutes(state, { source = 'node_1', config = defaultConfig } = {}) {
     const gw = config.gateway;
     const unreachable = config.unreachableCost;
@@ -98,7 +142,6 @@ function evaluateRoutes(state, { source = 'node_1', config = defaultConfig } = {
         return { ...empty, optimalRoute: `${source} đang ngoại tuyến (Offline)` };
     }
 
-    // Với mỗi hop đầu tiên, tìm đường tốt nhất tới gateway mà không quay lại nguồn
     const first = buildGraph(state, config).get(source) || [];
     const alternatives = first.map(({ to, weight }) => {
         if (to === gw) return { via: to, path: [source, gw], cost: weight };
@@ -131,4 +174,4 @@ function evaluateRoutes(state, { source = 'node_1', config = defaultConfig } = {
     };
 }
 
-module.exports = { calculateCost, evaluateRoutes, dijkstra, buildGraph, rssiQuality };
+module.exports = { calculateCost, evaluateRoutes, dijkstra, buildGraph, rssiQuality, defaultConfig };

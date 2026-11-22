@@ -2,97 +2,112 @@
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
-    <title>Viewstreets Modular Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Viewstreets Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="/socket.io/socket.io.js"></script>
 </head>
 <body class="bg-slate-900 text-slate-100 font-sans p-4">
-    <header class="flex justify-between items-center bg-slate-800 p-4 rounded-xl border border-slate-700 mb-4">
+    <header class="flex flex-wrap gap-3 justify-between items-center bg-slate-800 p-4 rounded-xl border border-slate-700 mb-4">
         <div>
             <h1 class="text-xl font-bold text-sky-400">VIEWSTREETS IOT CONTROL CENTER</h1>
-            <p class="text-xs text-slate-400">Kiến trúc mô-đun chuyên nghiệp - Adafruit IO & WebSocket Real-time</p>
+            <p class="text-xs text-slate-400">Danh sách node động · xác nhận NodeID qua web · Adafruit IO &amp; WebSocket</p>
         </div>
-        <div>
-            <span id="mode-badge" class="px-4 py-1.5 rounded-full font-bold text-sm bg-emerald-600">MODE: NORMAL</span>
+        <div class="flex flex-wrap items-center gap-2 text-xs">
+            <span id="conn-status" class="px-3 py-1 rounded-full bg-slate-600 font-semibold">Đang kết nối…</span>
+            <span id="admin-status" class="px-3 py-1 rounded-full bg-slate-700 font-semibold">Quyền: --</span>
+            <input id="token-input" type="password" placeholder="ADMIN_TOKEN (nếu có)"
+                   class="bg-slate-900 border border-slate-600 rounded px-2 py-1 w-40" autocomplete="off">
+            <button id="token-save" class="bg-slate-700 hover:bg-slate-600 rounded px-2 py-1 font-semibold">Dùng token</button>
         </div>
     </header>
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <!-- Cột 1: Thông số phần cứng thực tế -->
-        <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-4">
-            <h2 class="text-lg font-semibold text-amber-400 border-b border-slate-700 pb-2">1. Trạng thái Node 1 (Real)</h2>
-            <div class="grid grid-cols-2 gap-3 text-center">
-                <div class="bg-slate-900 p-3 rounded-lg">
-                    <div class="text-xs text-slate-400">Nhiệt độ (DHT20)</div>
-                    <div id="val-temp" class="text-2xl font-bold text-rose-400">-- °C</div>
-                </div>
-                <div class="bg-slate-900 p-3 rounded-lg">
-                    <div class="text-xs text-slate-400">Độ ẩm (DHT20)</div>
-                    <div id="val-humi" class="text-2xl font-bold text-sky-400">-- %</div>
-                </div>
-                <div class="bg-slate-900 p-3 rounded-lg">
-                    <div class="text-xs text-slate-400">Ánh sáng</div>
-                    <div id="val-light" class="text-2xl font-bold text-yellow-300">-- Lux</div>
-                </div>
-                <div class="bg-slate-900 p-3 rounded-lg">
-                    <div class="text-xs text-slate-400">Dung lượng Pin</div>
-                    <div id="val-bat" class="text-2xl font-bold text-emerald-400">-- %</div>
-                </div>
+    <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+        <!-- Cột trái: danh sách node, Add Camera, hàng chờ -->
+        <aside class="space-y-4">
+            <section class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <h2 class="text-sm font-semibold text-sky-400 border-b border-slate-700 pb-2 mb-2">
+                    Danh sách Node <span id="node-count" class="text-slate-400 font-normal"></span>
+                </h2>
+                <ul id="node-list" class="space-y-1 max-h-72 overflow-y-auto"></ul>
+            </section>
+
+            <section class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <h2 class="text-sm font-semibold text-emerald-400 border-b border-slate-700 pb-2 mb-2">Add Camera</h2>
+                <form id="add-form" class="space-y-2 text-sm">
+                    <input id="add-id" required maxlength="32" placeholder="NodeID (vd: cam_01)"
+                           class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5 font-mono" autocomplete="off">
+                    <input id="add-name" maxlength="40" placeholder="Tên hiển thị (tuỳ chọn)"
+                           class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5" autocomplete="off">
+                    <button class="w-full bg-emerald-600 hover:bg-emerald-500 rounded py-1.5 font-semibold">Thêm node</button>
+                    <p id="add-msg" class="text-xs text-slate-400 min-h-4"></p>
+                </form>
+            </section>
+
+            <section class="bg-slate-800 p-4 rounded-xl border border-amber-700/60">
+                <h2 class="text-sm font-semibold text-amber-400 border-b border-slate-700 pb-2 mb-2">
+                    Chờ xác nhận <span id="pending-count" class="text-slate-400 font-normal"></span>
+                </h2>
+                <ul id="pending-list" class="space-y-2"></ul>
+            </section>
+        </aside>
+
+        <!-- Vùng chính: node đang chọn -->
+        <main class="lg:col-span-3 space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <h2 id="sel-title" class="text-lg font-semibold text-amber-400">Chưa chọn node</h2>
+                <span id="mode-badge" class="px-4 py-1.5 rounded-full font-bold text-sm bg-slate-600">MODE: --</span>
             </div>
 
-            <div class="bg-slate-900 p-3 rounded-lg space-y-2 text-sm">
-                <div class="flex justify-between"><span>Phát hiện người/xe:</span> <strong id="val-motion" class="text-slate-300">Không có</strong></div>
-                <div class="flex justify-between"><span>Đèn NeoPixel:</span> <strong id="val-led" class="text-amber-300">Mức 0</strong></div>
-                <div class="flex justify-between"><span>Chẩn đoán LCD:</span> <strong id="val-error" class="text-emerald-400">Ổn định</strong></div>
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <section class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
+                    <div class="grid grid-cols-2 gap-3 text-center">
+                        <div class="bg-slate-900 p-3 rounded-lg"><div class="text-xs text-slate-400">Nhiệt độ</div><div id="val-temp" class="text-2xl font-bold text-rose-400">-- °C</div></div>
+                        <div class="bg-slate-900 p-3 rounded-lg"><div class="text-xs text-slate-400">Độ ẩm</div><div id="val-humi" class="text-2xl font-bold text-sky-400">-- %</div></div>
+                        <div class="bg-slate-900 p-3 rounded-lg"><div class="text-xs text-slate-400">Ánh sáng</div><div id="val-light" class="text-2xl font-bold text-yellow-300">-- Lux</div></div>
+                        <div class="bg-slate-900 p-3 rounded-lg"><div class="text-xs text-slate-400">Pin</div><div id="val-bat" class="text-2xl font-bold text-emerald-400">-- %</div></div>
+                    </div>
+                    <div class="bg-slate-900 p-3 rounded-lg space-y-2 text-sm">
+                        <div class="flex justify-between"><span>Trạng thái:</span> <strong id="val-online" class="text-slate-300">--</strong></div>
+                        <div class="flex justify-between"><span>Cập nhật lần cuối:</span> <strong id="val-seen" class="text-slate-300">--</strong></div>
+                        <div class="flex justify-between"><span>Phát hiện người/xe:</span> <strong id="val-motion" class="text-slate-300">--</strong></div>
+                        <div class="flex justify-between"><span>Đèn NeoPixel:</span> <strong id="val-led" class="text-amber-300">--</strong></div>
+                        <div class="flex justify-between"><span>Chẩn đoán:</span> <strong id="val-error" class="text-emerald-400">--</strong></div>
+                    </div>
+                </section>
+
+                <section class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
+                    <h3 class="text-sm font-semibold text-purple-400">Camera</h3>
+                    <div class="bg-black rounded-lg h-56 flex items-center justify-center overflow-hidden border border-slate-700 relative">
+                        <img id="cam-view" alt="" class="max-h-full object-contain hidden">
+                        <span id="cam-ph" class="text-xs text-slate-500 absolute">Chưa có ảnh từ node này</span>
+                    </div>
+                    <div class="bg-slate-900 p-2 rounded-lg"><canvas id="envChart" height="120"></canvas></div>
+                </section>
             </div>
 
-            <div class="pt-2 space-y-2">
-                <p class="text-xs text-slate-400 font-semibold uppercase">Điều khiển từ xa (MQTT)</p>
-                <div class="grid grid-cols-2 gap-2">
-                    <button onclick="sendCmd('capture', 1)" class="bg-sky-600 hover:bg-sky-500 py-2 px-3 rounded-lg font-medium text-sm">Chụp ảnh Camera</button>
-                    <button onclick="sendCmd('toggle_mode', 1)" class="bg-amber-600 hover:bg-amber-500 py-2 px-3 rounded-lg font-medium text-sm">Chuyển Mode</button>
+            <section class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
+                <h3 class="text-sm font-semibold text-amber-400 border-b border-slate-700 pb-2">Điều khiển thiết bị (node đang chọn)</h3>
+                <div id="control-panel" class="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-3">
+                    <p class="text-xs text-slate-500">Đang chờ dữ liệu từ server…</p>
                 </div>
-            </div>
-        </div>
+            </section>
 
-        <!-- Cột 2: Sơ đồ Topology & Cân bằng tải -->
-        <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 flex flex-col justify-between">
-            <div>
-                <h2 class="text-lg font-semibold text-emerald-400 border-b border-slate-700 pb-2">2. Cân bằng tải & Định tuyến Cost</h2>
-                <svg viewBox="0 0 400 220" class="w-full h-52 bg-slate-900 rounded-lg mt-3 border border-slate-700">
-                    <line id="link-1-2" x1="60" y1="110" x2="200" y2="50" stroke="#10b981" stroke-width="4" />
-                    <line id="link-2-gw" x1="200" y1="50" x2="340" y2="110" stroke="#10b981" stroke-width="4" />
-                    <line id="link-1-3" x1="60" y1="110" x2="150" y2="170" stroke="#475569" stroke-width="2" stroke-dasharray="5,5" />
-                    <line id="link-3-4" x1="150" y1="170" x2="250" y2="170" stroke="#475569" stroke-width="2" stroke-dasharray="5,5" />
-                    <line id="link-4-gw" x1="250" y1="170" x2="340" y2="110" stroke="#475569" stroke-width="2" stroke-dasharray="5,5" />
-                    <circle id="svg-node-1" cx="60" cy="110" r="18" fill="#10b981" /><text x="35" y="142" fill="#fff" font-size="11">Node 1</text>
-                    <circle id="svg-node-2" cx="200" cy="50" r="18" fill="#10b981" /><text x="180" y="25" fill="#fff" font-size="11">Node 2</text>
-                    <circle id="svg-node-3" cx="150" cy="170" r="16" fill="#3b82f6" /><text x="132" y="202" fill="#fff" font-size="11">Node 3</text>
-                    <circle id="svg-node-4" cx="250" cy="170" r="16" fill="#3b82f6" /><text x="232" y="202" fill="#fff" font-size="11">Node 4</text>
-                    <rect x="322" y="92" width="36" height="36" rx="6" fill="#8b5cf6" /><text x="318" y="142" fill="#fff" font-size="11">Gateway</text>
-                </svg>
-            </div>
-            <div class="mt-3 space-y-2">
-                <div id="routing-info" class="text-xs bg-slate-900 p-2 rounded text-emerald-300 font-mono">Đang tải định tuyến...</div>
-                <div class="flex gap-2">
-                    <button onclick="toggleSimNode('node_2')" class="flex-1 bg-rose-600 hover:bg-rose-500 py-1.5 px-2 rounded text-xs font-semibold">Giả lập Lỗi Node 2</button>
-                    <button onclick="toggleSimNode('node_3')" class="flex-1 bg-slate-700 hover:bg-slate-600 py-1.5 px-2 rounded text-xs font-semibold">Giả lập Lỗi Node 3</button>
-                </div>
-            </div>
-        </div>
+            <section class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <h3 class="text-sm font-semibold text-emerald-400 border-b border-slate-700 pb-2">Định tuyến Cost (từ node đang chọn tới Gateway)</h3>
+                <svg id="topo" viewBox="0 0 400 220" class="w-full h-52 bg-slate-900 rounded-lg mt-3 border border-slate-700"></svg>
+                <div id="routing-info" class="mt-2 text-xs bg-slate-900 p-2 rounded text-emerald-300 font-mono">--</div>
+            </section>
 
-        <!-- Cột 3: Camera & Biểu đồ -->
-        <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-4">
-            <h2 class="text-lg font-semibold text-purple-400 border-b border-slate-700 pb-2">3. Camera & Biểu đồ Môi trường</h2>
-            <div class="bg-black rounded-lg h-40 flex items-center justify-center overflow-hidden border border-slate-700">
-                <img id="cam-view" src="" alt="Chưa có ảnh Camera" class="max-h-full object-contain text-xs text-slate-500 text-center p-4" />
-            </div>
-            <div class="bg-slate-900 p-2 rounded-lg">
-                <canvas id="envChart" height="120"></canvas>
-            </div>
-        </div>
+            <details class="bg-slate-800 rounded-xl border border-slate-700" open>
+                <summary class="cursor-pointer p-3 text-sm font-semibold text-slate-300">Nhật ký sự kiện (để kiểm tra backend)</summary>
+                <pre id="log" class="p-3 pt-0 text-xs font-mono text-slate-400 max-h-56 overflow-y-auto whitespace-pre-wrap"></pre>
+            </details>
+        </main>
     </div>
+
+    <div id="toast" class="fixed bottom-4 right-4 max-w-sm bg-rose-700 text-sm px-4 py-2 rounded-lg shadow-lg hidden"></div>
     <script src="app.js"></script>
 </body>
 </html>

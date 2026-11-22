@@ -1,24 +1,37 @@
 const mqtt = require('mqtt');
-require('dotenv').config();
+const env = require('./env');
 
-const AIO_USERNAME = process.env.AIO_USERNAME;
-const AIO_KEY = process.env.AIO_KEY;
-const ADAFRUIT_MQTT_URL = `mqtt://${AIO_USERNAME}:${AIO_KEY}@io.adafruit.com:1883`;
-
-const client = mqtt.connect(ADAFRUIT_MQTT_URL);
-
-// Định nghĩa các Feed trên Adafruit IO
 const FEEDS = {
-    TELEMETRY: `${AIO_USERNAME}/feeds/viewstreet.telemetry`,
-    CAMERA:    `${AIO_USERNAME}/feeds/viewstreet.camera`,
-    CONTROL:   `${AIO_USERNAME}/feeds/viewstreet.control`
+    TELEMETRY: `${env.AIO_USERNAME}/feeds/viewstreet.telemetry`,
+    CAMERA:    `${env.AIO_USERNAME}/feeds/viewstreet.camera`,
+    CONTROL:   `${env.AIO_USERNAME}/feeds/viewstreet.control`,
 };
 
-client.on('connect', () => {
-    console.log('[Adafruit IO Config] Kết nối thành công tới io.adafruit.com');
-    client.subscribe([FEEDS.TELEMETRY, FEEDS.CAMERA], (err) => {
-        if (!err) console.log('[Adafruit IO Config] Đã Subcribe thành công các Feed.');
-    });
-});
+let client = null;
 
-module.exports = { client, FEEDS };
+if (env.AIO_USERNAME && env.AIO_KEY) {
+    const url = `mqtt://${env.AIO_USERNAME}:${env.AIO_KEY}@io.adafruit.com:1883`;
+    client = mqtt.connect(url);
+
+    client.on('connect', () => {
+        console.log('[Adafruit IO] Đã kết nối broker thành công.');
+        client.subscribe([FEEDS.TELEMETRY, FEEDS.CAMERA], (err) => {
+            if (!err) console.log('[Adafruit IO] Đã Subscribe các Feed.');
+        });
+    });
+
+    client.on('error', (err) => {
+        console.error('[Adafruit IO Error]:', err.message);
+    });
+} else {
+    console.warn('[Adafruit IO] Thiếu AIO_USERNAME hoặc AIO_KEY trong .env - chạy ở chế độ Offline/Mock.');
+}
+
+function publishControl(frame, cb) {
+    if (!client || client.connected === false) {
+        throw new Error('MQTT chưa kết nối');
+    }
+    client.publish(FEEDS.CONTROL, JSON.stringify(frame), cb);
+}
+
+module.exports = { client, FEEDS, publishControl };

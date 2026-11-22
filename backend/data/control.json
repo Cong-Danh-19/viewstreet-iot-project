@@ -1,0 +1,16 @@
+{
+  "cam_005": {
+    "ledBrightness": 91,
+    "ledMode": "manual",
+    "camMode": "periodic"
+  },
+  "node_1": {
+    "ledBrightness": 67,
+    "ledMode": "manual",
+    "mode": "NORMAL"
+  },
+  "cam_03": {
+    "ledMode": "manual",
+    "ledBrightness": 53
+  }
+}
