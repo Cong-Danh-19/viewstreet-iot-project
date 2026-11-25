@@ -75,7 +75,18 @@ function alertOffline(nodeId) {
     return emitAlert('offline', nodeId, 'Node mất kết nối (Offline)');
 }
 
+function clearNode(nodeId) {
+    if (!nodeId) return;
+    const prefix = `${nodeId}:`;
+    for (const key of lastAlertAt.keys()) {
+        if (key.startsWith(prefix)) {
+            lastAlertAt.delete(key);
+        }
+    }
+}
+
 module.exports = {
     checkTelemetryAlerts,
     alertOffline,
+    clearNode,
 };

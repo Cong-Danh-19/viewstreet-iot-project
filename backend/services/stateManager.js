@@ -22,7 +22,6 @@ function blankState(entry) {
         load: 0,
         lastSeen: null,
         packetCount: 0,
-        simulated: false,
     };
 }
 
@@ -41,7 +40,12 @@ function registerNode(entry) {
 }
 
 function unregisterNode(id) {
+    if (!id || id === 'gateway') return;
     nodes.delete(id);
+}
+
+function removeNode(id) {
+    unregisterNode(id);
 }
 
 function renameNode(id, name) {
@@ -66,7 +70,6 @@ async function updateNode(id, data) {
         id,
         name: current.name,
         online: true,
-        simulated: false,
         lastSeen: Date.now(),
         packetCount: (current.packetCount || 0) + 1,
     };
@@ -86,7 +89,7 @@ async function updateNode(id, data) {
 }
 
 /**
- * Cập nhật thời gian hoạt động online khi node gửi ảnh/video qua HTTP.
+ * Cập nhật thời gian hoạt động online khi node gửi ảnh/video thật qua HTTP.
  */
 function touchOnline(id) {
     const current = nodes.get(id);
@@ -96,26 +99,6 @@ function touchOnline(id) {
     current.packetCount = (current.packetCount || 0) + 1;
     if (current.error === 'Đang chờ thiết bị...') current.error = 'OK';
     return getState();
-}
-
-/**
- * Giả lập trạng thái node (pin yếu, quá tải, offline, RSSI) để test định tuyến cân bằng tải.
- */
-function simulateNode(id, patch = {}) {
-    const current = nodes.get(id);
-    if (!current) return null;
-
-    const next = { ...current, simulated: true };
-    if (typeof patch.online === 'boolean') {
-        next.online = patch.online;
-        if (patch.online) next.lastSeen = Date.now();
-    }
-    if (Number.isFinite(patch.bat)) next.bat = Math.max(0, Math.min(100, patch.bat));
-    if (Number.isFinite(patch.load)) next.load = Math.max(0, Math.min(100, patch.load));
-    if (Number.isFinite(patch.rssi)) next.rssi = patch.rssi;
-
-    nodes.set(id, next);
-    return { networkState: getState(), node: next };
 }
 
 function sweepOffline(timeoutMs) {
@@ -141,9 +124,9 @@ module.exports = {
     getHistory,
     updateNode,
     touchOnline,
-    simulateNode,
     registerNode,
     unregisterNode,
+    removeNode,
     renameNode,
     sweepOffline,
 };

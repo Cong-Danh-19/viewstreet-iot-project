@@ -38,7 +38,21 @@ async function renameNode(id, name) {
 }
 
 async function deleteNode(id) {
-    await pgPool.query(`DELETE FROM nodes WHERE id = $1`, [id]);
+    const client = await pgPool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM network_links WHERE from_node = $1 OR to_node = $1', [id]);
+        await client.query('DELETE FROM camera_media WHERE node_id = $1', [id]);
+        await client.query('DELETE FROM control_logs WHERE node_id = $1', [id]);
+        await client.query('DELETE FROM node_controls WHERE node_id = $1', [id]);
+        await client.query('DELETE FROM nodes WHERE id = $1', [id]);
+        await client.query('COMMIT');
+    } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+    } finally {
+        client.release();
+    }
 }
 
 async function getLinks() {

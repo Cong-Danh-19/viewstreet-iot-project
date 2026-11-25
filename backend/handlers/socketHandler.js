@@ -78,6 +78,9 @@ module.exports = function registerSocketHandlers(io) {
             if (!entry) return cb && cb({ ok: false, error: 'nodeId không hợp lệ' });
 
             stateManager.registerNode(entry);
+            routingService.wakeRelays(stateManager);
+            await routingService.syncTopology();
+
             io.emit('network_update', stateManager.getState());
             io.emit('pending_nodes', registry.listPending());
             if (typeof cb === 'function') cb({ ok: true, node: entry });
@@ -90,6 +93,9 @@ module.exports = function registerSocketHandlers(io) {
             if (!entry) return cb && cb({ ok: false, error: 'nodeId không hợp lệ (chỉ dùng chữ, số, _, -)' });
 
             stateManager.registerNode(entry);
+            routingService.wakeRelays(stateManager);
+            await routingService.syncTopology();
+
             io.emit('network_update', stateManager.getState());
             io.emit('pending_nodes', registry.listPending());
             if (typeof cb === 'function') cb({ ok: true, node: entry });
@@ -106,15 +112,32 @@ module.exports = function registerSocketHandlers(io) {
             if (typeof cb === 'function') cb({ ok: true });
         }));
 
-        // Xóa node
-        socket.on('remove_node', safe(async (nodeId, cb) => {
+        // Xóa vĩnh viễn node khỏi PostgreSQL & RAM
+        const handleDeleteNode = safe(async (payload, cb) => {
             if (!requireAuth(cb)) return;
-            await registry.remove(nodeId);
-            stateManager.unregisterNode(nodeId);
+            const id = typeof payload === 'string'
+                ? payload.trim()
+                : String((payload && payload.nodeId) || '').trim();
+
+            if (!id || id === 'gateway' || routingService.RELAY_IDS.includes(id)) {
+                return cb && cb({ ok: false, error: 'Không thể xóa Gateway hoặc 3 node trung gian mặc định' });
+            }
+
+            const result = await registry.remove(id);
+            if (result && result.ok === false) {
+                return cb && cb(result);
+            }
+
+            stateManager.unregisterNode(id);
+            await routingService.syncTopology();
+
             io.emit('network_update', stateManager.getState());
             io.emit('pending_nodes', registry.listPending());
             if (typeof cb === 'function') cb({ ok: true });
-        }));
+        });
+
+        socket.on('delete_node', handleDeleteNode);
+        socket.on('remove_node', handleDeleteNode);
 
         // Điều khiển từ xa
         socket.on('send_control', safe(async ({ nodeId, command, params }, cb) => {
@@ -152,17 +175,6 @@ module.exports = function registerSocketHandlers(io) {
             routingService.defaultConfig.autoDirectToGateway = Boolean(enabled);
             io.emit('network_update', stateManager.getState());
             if (typeof cb === 'function') cb({ ok: true, autoDirectToGateway: routingService.defaultConfig.autoDirectToGateway });
-        }));
-
-        // Giả lập thông số node để test định tuyến cân bằng tải
-        socket.on('simulate_node', safe(async (payload, cb) => {
-            if (!requireAuth(cb)) return;
-            const { nodeId, ...patch } = payload || {};
-            const res = stateManager.simulateNode(nodeId, patch);
-            if (!res) return cb && cb({ ok: false, error: `Không tìm thấy node '${nodeId}'` });
-
-            io.emit('network_update', res.networkState);
-            if (typeof cb === 'function') cb({ ok: true, node: res.node });
         }));
     });
 };

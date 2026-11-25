@@ -7,6 +7,17 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="/socket.io/socket.io.js"></script>
+    <style>
+        @keyframes packetFlow {
+            to {
+                stroke-dashoffset: -28;
+            }
+        }
+        .route-flow {
+            stroke-dasharray: 8, 6;
+            animation: packetFlow 0.9s linear infinite;
+        }
+    </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen font-sans">
     <!-- Thanh tiêu đề -->
@@ -38,7 +49,7 @@
 
                 <form id="addNodeForm" class="pt-3 border-t border-slate-800 space-y-2">
                     <div class="text-xs font-medium text-slate-400">Thêm Node mới</div>
-                    <input id="newNodeId" type="text" placeholder="Mã node (vd: cam_03)" required
+                    <input id="newNodeId" type="text" placeholder="Mã node (vd: cam_01)" required
                         class="w-full bg-slate-800 border border-slate-700 rounded px-2.5 py-1.5 text-xs" />
                     <input id="newNodeName" type="text" placeholder="Tên hiển thị"
                         class="w-full bg-slate-800 border border-slate-700 rounded px-2.5 py-1.5 text-xs" />
@@ -150,33 +161,34 @@
                 </div>
             </div>
 
-            <!-- Hàng 3: Định tuyến Cost & Cân bằng tải -->
+            <!-- Hàng 3: Định tuyến Cost & Cân bằng tải (Đã bỏ các nút giả lập) -->
             <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
                 <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
                     <div>
                         <h3 class="text-sm font-semibold text-slate-200">Định tuyến Cost & Cân bằng tải (Dijkstra)</h3>
                         <p id="optimalRouteText" class="text-xs text-emerald-400 font-mono mt-0.5">Tuyến tối ưu: --</p>
                     </div>
-                    <div class="flex flex-wrap gap-2">
-                        <button id="btnSimNormal" class="text-xs px-2.5 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white">
-                            Giả lập Online toàn mạng
-                        </button>
-                        <button id="btnSimOverload" class="text-xs px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white">
-                            Giả lập Node 2 quá tải
-                        </button>
-                        <button id="btnSimFail" class="text-xs px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white">
-                            Giả lập Node 2 sập
-                        </button>
+                    <div class="flex flex-wrap items-center gap-3 text-[11px] text-slate-400">
+                        <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span>Tải nhẹ</span>
+                        <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"></span>Trung bình</span>
+                        <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block"></span>Quá tải / Pin yếu</span>
+                        <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-slate-500 inline-block"></span>Mất kết nối</span>
                     </div>
                 </div>
 
-                <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-center">
-                    <div class="lg:col-span-2 bg-slate-950 border border-slate-800 rounded-lg p-2">
-                        <svg id="topologySvg" viewBox="0 0 640 220" class="w-full h-52"></svg>
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+                    <div class="lg:col-span-2 bg-slate-950 border border-slate-800 rounded-lg p-2 overflow-hidden">
+                        <svg id="topologySvg" viewBox="0 0 660 270" class="w-full min-h-[260px]"></svg>
                     </div>
-                    <div class="space-y-2 text-xs">
-                        <div class="font-semibold text-slate-300">Các tuyến khả dụng:</div>
-                        <div id="routeAlternatives" class="space-y-1.5 text-slate-400"></div>
+                    <div class="space-y-3 text-xs">
+                        <div>
+                            <div class="font-semibold text-slate-300 mb-1.5">Các tuyến khả dụng:</div>
+                            <div id="routeAlternatives" class="space-y-1.5 text-slate-400"></div>
+                        </div>
+                        <div class="pt-2 border-t border-slate-800">
+                            <div class="font-semibold text-slate-300 mb-1.5">Thông số node trung gian:</div>
+                            <div id="relayMetricsList" class="space-y-1.5 text-slate-400"></div>
+                        </div>
                     </div>
                 </div>
             </div>

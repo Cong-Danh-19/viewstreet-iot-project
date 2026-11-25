@@ -3,6 +3,7 @@ const registry = require('../services/nodeRegistry');
 const stateManager = require('../services/stateManager');
 const controlService = require('../services/controlService');
 const alertService = require('../services/alertService');
+const routingService = require('../services/routingService');
 
 module.exports = function registerMqttHandlers(io) {
     adafruit.onMessage(async (topic, payloadBuffer) => {
@@ -42,15 +43,19 @@ module.exports = function registerMqttHandlers(io) {
         const updated = await stateManager.updateNode(nodeId, data);
         if (!updated) return;
 
-        io.emit('network_update', updated.networkState);
+        // 5. Đánh thức 3 node trung gian & đồng bộ đồ thị định tuyến đa chặng
+        routingService.wakeRelays(stateManager);
+        await routingService.syncTopology();
+
+        io.emit('network_update', stateManager.getState());
         io.emit('sensor_update', updated.node);
 
-        // 5. Đồng bộ cấu hình điều khiển nếu node vừa thức dậy
+        // 6. Đồng bộ cấu hình điều khiển nếu node vừa thức dậy
         if (wasOffline) {
             controlService.syncNode(nodeId, adafruit.publishControl);
         }
 
-        // 6. Kiểm tra ngưỡng cảnh báo
+        // 7. Kiểm tra ngưỡng cảnh báo
         const alerts = alertService.checkTelemetryAlerts(updated.node);
         for (const alert of alerts) {
             io.emit('system_alert', alert);

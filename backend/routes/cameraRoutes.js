@@ -2,6 +2,7 @@ const express = require('express');
 const mediaRepo = require('../repositories/mediaRepo');
 const registry = require('../services/nodeRegistry');
 const stateManager = require('../services/stateManager');
+const routingService = require('../services/routingService');
 
 const mjpegClients = new Map(); // nodeId -> Set<Response>
 
@@ -10,13 +11,9 @@ function broadcastMjpegFrame(nodeId, jpegBuffer) {
     if (!clients || clients.size === 0) return;
 
     const header =
-        `--frame
-` +
-        `Content-Type: image/jpeg
-` +
-        `Content-Length: ${jpegBuffer.length}
-
-`;
+        `--frame\r\n` +
+        `Content-Type: image/jpeg\r\n` +
+        `Content-Length: ${jpegBuffer.length}\r\n\r\n`;
 
     for (const res of clients) {
         if (!res.writableEnded) {
@@ -91,9 +88,16 @@ module.exports = function createCameraRoutes(io) {
                 mimeType: resolvedMime,
             });
 
-            const networkState = stateManager.touchOnline(nodeId);
-            if (networkState && io) {
-                io.emit('network_update', networkState);
+            // Đánh thức node nguồn & các node trung gian để tính tuyến tối ưu qua trung gian
+            stateManager.touchOnline(nodeId);
+            routingService.wakeRelays(stateManager);
+            await routingService.syncTopology();
+
+            const fullState = stateManager.getState();
+            const routeInfo = routingService.evaluateRoutes(fullState, { source: nodeId });
+
+            if (io) {
+                io.emit('network_update', fullState);
             }
 
             if (mediaType === 'image') {
@@ -107,13 +111,26 @@ module.exports = function createCameraRoutes(io) {
                         image: `data:${resolvedMime};base64,${buffer.toString('base64')}`,
                         ts: saved.ts,
                         sizeBytes: saved.sizeBytes,
+                        routing: {
+                            optimalRoute: routeInfo.optimalRoute,
+                            optimalPath: routeInfo.optimalPath,
+                            totalCost: routeInfo.totalCost,
+                        },
                     });
                 }
             } else if (io) {
                 io.to(`cam:${nodeId}`).emit('camera_video_uploaded', saved);
             }
 
-            return res.json({ ok: true, ...saved });
+            return res.json({
+                ok: true,
+                ...saved,
+                routing: {
+                    optimalRoute: routeInfo.optimalRoute,
+                    optimalPath: routeInfo.optimalPath,
+                    totalCost: routeInfo.totalCost,
+                },
+            });
         } catch (err) {
             console.error('[HTTP Camera] Lỗi upload:', err);
             return res.status(500).json({ ok: false, error: 'Lỗi lưu media vào PostgreSQL' });
