@@ -1,37 +1,74 @@
 const mqtt = require('mqtt');
 const env = require('./env');
 
+let client = null;
+let connected = false;
+const messageHandlers = [];
+
 const FEEDS = {
-    TELEMETRY: `${env.AIO_USERNAME}/feeds/viewstreet.telemetry`,
-    CAMERA:    `${env.AIO_USERNAME}/feeds/viewstreet.camera`,
-    CONTROL:   `${env.AIO_USERNAME}/feeds/viewstreet.control`,
+    telemetry: env.AIO_USERNAME ? `${env.AIO_USERNAME}/feeds/viewstreet.telemetry` : 'viewstreet/telemetry',
+    control: env.AIO_USERNAME ? `${env.AIO_USERNAME}/feeds/viewstreet.control` : 'viewstreet/control',
 };
 
-let client = null;
+function onMessage(fn) {
+    if (typeof fn === 'function') messageHandlers.push(fn);
+}
 
-if (env.AIO_USERNAME && env.AIO_KEY) {
-    const url = `mqtt://${env.AIO_USERNAME}:${env.AIO_KEY}@io.adafruit.com:1883`;
-    client = mqtt.connect(url);
+function connect() {
+    if (!env.AIO_USERNAME || !env.AIO_KEY || env.AIO_USERNAME === 'your_username') {
+        console.log('[MQTT] Chưa cấu hình AIO_USERNAME/AIO_KEY trong .env — bỏ qua kết nối Adafruit IO (vẫn dùng được HTTP & WebSocket).');
+        return;
+    }
+
+    const brokerUrl = 'mqtts://io.adafruit.com:8883';
+    client = mqtt.connect(brokerUrl, {
+        username: env.AIO_USERNAME,
+        password: env.AIO_KEY,
+        reconnectPeriod: 5000,
+    });
 
     client.on('connect', () => {
-        console.log('[Adafruit IO] Đã kết nối broker thành công.');
-        client.subscribe([FEEDS.TELEMETRY, FEEDS.CAMERA], (err) => {
-            if (!err) console.log('[Adafruit IO] Đã Subscribe các Feed.');
+        connected = true;
+        console.log('[MQTT] Đã kết nối tới Adafruit IO.');
+        client.subscribe([FEEDS.telemetry, FEEDS.control], (err) => {
+            if (err) console.error('[MQTT] Lỗi subscribe:', err.message);
+            else console.log(`[MQTT] Đã lắng nghe: ${FEEDS.telemetry}, ${FEEDS.control}`);
         });
     });
 
-    client.on('error', (err) => {
-        console.error('[Adafruit IO Error]:', err.message);
+    client.on('message', (topic, payload) => {
+        for (const handler of messageHandlers) {
+            try {
+                handler(topic, payload);
+            } catch (err) {
+                console.error('[MQTT] Lỗi xử lý gói tin:', err.message);
+            }
+        }
     });
-} else {
-    console.warn('[Adafruit IO] Thiếu AIO_USERNAME hoặc AIO_KEY trong .env - chạy ở chế độ Offline/Mock.');
+
+    client.on('close', () => {
+        connected = false;
+    });
+
+    client.on('error', (err) => {
+        console.error('[MQTT] Lỗi kết nối:', err.message);
+    });
 }
 
-function publishControl(frame, cb) {
-    if (!client || client.connected === false) {
-        throw new Error('MQTT chưa kết nối');
+function publishControl(nodeId, payload) {
+    const message = JSON.stringify({ nodeId, ...payload, ts: Date.now() });
+    if (!client || !connected) {
+        console.log(`[MQTT][Offline-Mock] Gửi lệnh tới ${nodeId}:`, message);
+        return false;
     }
-    client.publish(FEEDS.CONTROL, JSON.stringify(frame), cb);
+    client.publish(FEEDS.control, message);
+    return true;
 }
 
-module.exports = { client, FEEDS, publishControl };
+module.exports = {
+    FEEDS,
+    connect,
+    onMessage,
+    publishControl,
+    isConnected: () => connected,
+};

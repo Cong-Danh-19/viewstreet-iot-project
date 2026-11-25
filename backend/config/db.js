@@ -62,29 +62,16 @@ async function initDatabases(retries = 15, delayMs = 3000) {
                 ON camera_media (node_id, captured_at DESC);
             `);
 
-            // Seed các node mẫu ban đầu nếu bảng nodes đang trống
+            console.log('[DB] Đã kết nối PostgreSQL & khởi tạo schema thành công.');
+
+            // Kiểm tra số lượng node hiện có (không tự động tạo node mẫu)
             const countRes = await pgPool.query(`SELECT COUNT(*)::int AS cnt FROM nodes`);
             if (countRes.rows[0].cnt === 0) {
-                await pgPool.query(`
-                    INSERT INTO nodes (id, name, source, status) VALUES
-                    ('node_1', 'Node Tuyến Đường 01', 'seed', 'approved'),
-                    ('node_2', 'Node Trung Gian 02', 'seed', 'approved'),
-                    ('node_3', 'Node Trung Gian 03', 'seed', 'approved')
-                    ON CONFLICT (id) DO NOTHING;
-                `);
-                await pgPool.query(`
-                    INSERT INTO network_links (from_node, to_node) VALUES
-                    ('node_1', 'node_2'),
-                    ('node_1', 'node_3'),
-                    ('node_2', 'gateway'),
-                    ('node_3', 'gateway'),
-                    ('node_2', 'node_3'),
-                    ('node_3', 'node_2')
-                    ON CONFLICT DO NOTHING;
-                `);
+                console.log('[DB] Chưa có node đăng ký.');
+            } else {
+                console.log(`[DB] Đã tải ${countRes.rows[0].cnt} node đăng ký từ PostgreSQL.`);
             }
 
-            console.log('[DB] Đã kết nối PostgreSQL & khởi tạo schema thành công.');
             console.log(`[DB] Sẵn sàng ghi chuỗi thời gian vào InfluxDB (${env.INFLUX_URL}, bucket: ${env.INFLUX_BUCKET}).`);
             return;
         } catch (err) {

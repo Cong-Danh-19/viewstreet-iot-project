@@ -1,37 +1,21 @@
-const fs = require('fs');
-const path = require('path');
-
-const LINKS_FILE = path.join(__dirname, '../data/links.json');
-
-const DEFAULT_LINKS = [
-    ['node_1', 'gateway'],
-    ['node_1', 'node_2'],
-    ['node_1', 'node_3'],
-    ['node_2', 'gateway'],
-    ['node_3', 'gateway'],
-    ['node_2', 'node_3'],
-    ['node_3', 'node_2'],
-];
-
-function loadLinks() {
-    try {
-        const parsed = JSON.parse(fs.readFileSync(LINKS_FILE, 'utf8'));
-        if (Array.isArray(parsed) && parsed.length) return parsed;
-    } catch (e) { /* chưa có file links.json thì dùng mặc định */ }
-    return DEFAULT_LINKS;
-}
+const nodeRepo = require('../repositories/nodeRepo');
 
 const defaultConfig = {
     weights: { hop: 1.0, battery: 2.0, rssi: 1.5, load: 1.0 },
     rssi: { good: -30, bad: -100 },
     defaults: { bat: 50, rssi: -85, load: 50 },
     gateway: 'gateway',
-    autoDirectToGateway: false, // Tắt nối thẳng gateway để test định tuyến qua node trung gian
-    links: loadLinks(),
+    autoDirectToGateway: false, // Tắt tự động nối thẳng để ưu tiên định tuyến đa chặng cân bằng tải
+    links: [],
     unreachableCost: Infinity,
 };
 
-defaultConfig.setLinks = function (newLinks) {
+async function initRouting() {
+    const links = await nodeRepo.getLinks();
+    defaultConfig.links = links;
+}
+
+defaultConfig.setLinks = async function (newLinks) {
     if (!Array.isArray(newLinks)) return false;
     const valid = newLinks.filter(
         (pair) =>
@@ -39,11 +23,13 @@ defaultConfig.setLinks = function (newLinks) {
             pair.length === 2 &&
             typeof pair[0] === 'string' &&
             typeof pair[1] === 'string' &&
+            pair[0].trim() &&
+            pair[1].trim() &&
             pair[0] !== pair[1]
-    );
+    ).map(([a, b]) => [a.trim(), b.trim()]);
+
     defaultConfig.links = valid;
-    fs.mkdirSync(path.dirname(LINKS_FILE), { recursive: true });
-    fs.writeFileSync(LINKS_FILE, JSON.stringify(valid, null, 2), 'utf8');
+    await nodeRepo.replaceLinks(valid);
     return true;
 };
 
@@ -136,6 +122,7 @@ function evaluateRoutes(state, { source = 'node_1', config = defaultConfig } = {
     const empty = {
         optimalPath: [], totalCost: unreachable, alternatives: [],
         costViaNode2: unreachable, costViaNode3: unreachable,
+        links: config.links,
     };
 
     if (!state[source] || !state[source].online) {
@@ -171,7 +158,16 @@ function evaluateRoutes(state, { source = 'node_1', config = defaultConfig } = {
         costViaNode2: viaCost('node_2'),
         costViaNode3: viaCost('node_3'),
         optimalRoute: best.path.join(' -> '),
+        links: config.links,
     };
 }
 
-module.exports = { calculateCost, evaluateRoutes, dijkstra, buildGraph, rssiQuality, defaultConfig };
+module.exports = {
+    initRouting,
+    calculateCost,
+    evaluateRoutes,
+    dijkstra,
+    buildGraph,
+    rssiQuality,
+    defaultConfig,
+};

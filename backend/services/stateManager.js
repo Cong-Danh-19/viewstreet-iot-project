@@ -1,16 +1,7 @@
-const fs = require('fs');
-const path = require('path');
 const registry = require('./nodeRegistry');
-
-const DATA_DIR = path.join(__dirname, '../data');
-const HISTORY_DIR = path.join(DATA_DIR, 'history');
-const LEGACY_HISTORY_FILE = path.join(DATA_DIR, 'history.json');
-const MAX_HISTORY = 50;
-
-fs.mkdirSync(HISTORY_DIR, { recursive: true });
+const sensorRepo = require('../repositories/sensorRepo');
 
 const nodes = new Map();
-const historyCache = new Map();
 
 function blankState(entry) {
     return {
@@ -20,8 +11,10 @@ function blankState(entry) {
         humi: 0,
         light: 0,
         motion: 0,
-        bat: 0,
-        mode: 'NORMAL',
+        rain: 0,
+        dust: 0,
+        bat: 100,
+        mode: 'AUTO',
         ledLevel: 0,
         error: 'Đang chờ thiết bị...',
         online: false,
@@ -33,60 +26,22 @@ function blankState(entry) {
     };
 }
 
-const historyFile = (id) => path.join(HISTORY_DIR, `${id}.json`);
-
-function readHistory(id) {
-    try {
-        return JSON.parse(fs.readFileSync(historyFile(id), 'utf8'));
-    } catch (e) {
-        return [];
+function init() {
+    nodes.clear();
+    for (const entry of registry.list()) {
+        nodes.set(entry.id, blankState(entry));
     }
 }
 
-function getHistory(id) {
-    if (!historyCache.has(id)) historyCache.set(id, readHistory(id));
-    return historyCache.get(id);
-}
-
-function appendHistory(id, data) {
-    const history = getHistory(id);
-    const now = new Date();
-    const record = {
-        nodeId: id,
-        ts: now.getTime(),
-        time: now.toLocaleTimeString('vi-VN'),
-        date: now.toLocaleDateString('vi-VN'),
-        temp: data.temp,
-        humi: data.humi,
-        light: data.light,
-        bat: data.bat,
-        motion: data.motion,
-        error: data.error || 'OK',
-    };
-    history.push(record);
-    if (history.length > MAX_HISTORY) history.shift();
-    fs.writeFileSync(historyFile(id), JSON.stringify(history, null, 2), 'utf8');
-    return record;
-}
-
-function migrateLegacyHistory() {
-    try {
-        if (!registry.isRegistered('node_1') || fs.existsSync(historyFile('node_1'))) return;
-        const legacy = JSON.parse(fs.readFileSync(LEGACY_HISTORY_FILE, 'utf8'));
-        if (Array.isArray(legacy) && legacy.length) {
-            fs.writeFileSync(historyFile('node_1'), JSON.stringify(legacy.slice(-MAX_HISTORY), null, 2), 'utf8');
-        }
-    } catch (e) { /* bỏ qua nếu không có file cũ */ }
-}
-
 function registerNode(entry) {
-    if (!nodes.has(entry.id)) nodes.set(entry.id, blankState(entry));
+    if (!nodes.has(entry.id)) {
+        nodes.set(entry.id, blankState(entry));
+    }
     return nodes.get(entry.id);
 }
 
 function unregisterNode(id) {
     nodes.delete(id);
-    historyCache.delete(id);
 }
 
 function renameNode(id, name) {
@@ -97,7 +52,10 @@ function renameNode(id, name) {
 const getState = () => Object.fromEntries(nodes);
 const getNodeState = (id) => nodes.get(id) || null;
 
-function updateNode(id, data) {
+/**
+ * Cập nhật số liệu cảm biến thực tế vào RAM và ghi chuỗi thời gian vào InfluxDB.
+ */
+async function updateNode(id, data) {
     const current = nodes.get(id);
     if (!current) return null;
 
@@ -112,13 +70,37 @@ function updateNode(id, data) {
         lastSeen: Date.now(),
         packetCount: (current.packetCount || 0) + 1,
     };
-    if (fields.error === undefined && current.error === 'Đang chờ thiết bị...') next.error = 'OK';
+    if (fields.error === undefined && current.error === 'Đang chờ thiết bị...') {
+        next.error = 'OK';
+    }
 
     nodes.set(id, next);
-    const newRecord = appendHistory(id, next);
-    return { networkState: getState(), node: next, newRecord };
+
+    try {
+        await sensorRepo.writeTelemetry(id, next);
+    } catch (err) {
+        console.error(`[InfluxDB] Không ghi được telemetry của ${id}:`, err.message);
+    }
+
+    return { networkState: getState(), node: next };
 }
 
+/**
+ * Cập nhật thời gian hoạt động online khi node gửi ảnh/video qua HTTP.
+ */
+function touchOnline(id) {
+    const current = nodes.get(id);
+    if (!current) return null;
+    current.online = true;
+    current.lastSeen = Date.now();
+    current.packetCount = (current.packetCount || 0) + 1;
+    if (current.error === 'Đang chờ thiết bị...') current.error = 'OK';
+    return getState();
+}
+
+/**
+ * Giả lập trạng thái node (pin yếu, quá tải, offline, RSSI) để test định tuyến cân bằng tải.
+ */
 function simulateNode(id, patch = {}) {
     const current = nodes.get(id);
     if (!current) return null;
@@ -140,7 +122,7 @@ function sweepOffline(timeoutMs) {
     const now = Date.now();
     const changed = [];
     for (const [id, st] of nodes) {
-        if (st.online && now - st.lastSeen > timeoutMs) {
+        if (st.online && st.lastSeen && now - st.lastSeen > timeoutMs) {
             st.online = false;
             changed.push(id);
         }
@@ -148,10 +130,20 @@ function sweepOffline(timeoutMs) {
     return changed;
 }
 
-for (const entry of registry.list()) registerNode(entry);
-migrateLegacyHistory();
+async function getHistory(id, limit = 50) {
+    return sensorRepo.getSensorHistory(id, limit);
+}
 
 module.exports = {
-    getState, getNodeState, getHistory, updateNode, simulateNode,
-    registerNode, unregisterNode, renameNode, sweepOffline,
+    init,
+    getState,
+    getNodeState,
+    getHistory,
+    updateNode,
+    touchOnline,
+    simulateNode,
+    registerNode,
+    unregisterNode,
+    renameNode,
+    sweepOffline,
 };

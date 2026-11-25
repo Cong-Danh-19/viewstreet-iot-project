@@ -1,113 +1,201 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Viewstreets Dashboard</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Viewstreets IoT Dashboard — Giám sát & Điều khiển Tuyến đường</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="/socket.io/socket.io.js"></script>
 </head>
-<body class="bg-slate-900 text-slate-100 font-sans p-4">
-    <header class="flex flex-wrap gap-3 justify-between items-center bg-slate-800 p-4 rounded-xl border border-slate-700 mb-4">
-        <div>
-            <h1 class="text-xl font-bold text-sky-400">VIEWSTREETS IOT CONTROL CENTER</h1>
-            <p class="text-xs text-slate-400">Danh sách node động · xác nhận NodeID qua web · Adafruit IO &amp; WebSocket</p>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans">
+    <!-- Thanh tiêu đề -->
+    <header class="bg-slate-900 border-b border-slate-800 px-6 py-3 flex flex-wrap items-center justify-between gap-4 sticky top-0 z-20">
+        <div class="flex items-center gap-3">
+            <div class="w-3 h-3 rounded-full bg-emerald-400 animate-pulse"></div>
+            <h1 class="text-lg font-bold tracking-wide text-white">VIEWSTREETS IoT</h1>
+            <span class="text-xs px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                InfluxDB + PostgreSQL + HTTP Camera
+            </span>
         </div>
-        <div class="flex flex-wrap items-center gap-2 text-xs">
-            <span id="conn-status" class="px-3 py-1 rounded-full bg-slate-600 font-semibold">Đang kết nối…</span>
-            <span id="admin-status" class="px-3 py-1 rounded-full bg-slate-700 font-semibold">Quyền: --</span>
-            <input id="token-input" type="password" placeholder="ADMIN_TOKEN (nếu có)"
-                   class="bg-slate-900 border border-slate-600 rounded px-2 py-1 w-40" autocomplete="off">
-            <button id="token-save" class="bg-slate-700 hover:bg-slate-600 rounded px-2 py-1 font-semibold">Dùng token</button>
+
+        <div class="flex items-center gap-2">
+            <span id="connStatus" class="text-xs px-2.5 py-1 rounded bg-slate-800 text-slate-300">Đang kết nối...</span>
+            <input id="adminTokenInput" type="password" placeholder="Nhập ADMIN_TOKEN..."
+                class="bg-slate-800 border border-slate-700 rounded px-3 py-1 text-xs text-white focus:outline-none focus:border-indigo-500" />
+            <button id="btnAuth" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded">
+                Dùng token
+            </button>
         </div>
     </header>
 
-    <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
-        <!-- Cột trái: danh sách node, Add Camera, hàng chờ -->
-        <aside class="space-y-4">
-            <section class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <h2 class="text-sm font-semibold text-sky-400 border-b border-slate-700 pb-2 mb-2">
-                    Danh sách Node <span id="node-count" class="text-slate-400 font-normal"></span>
-                </h2>
-                <ul id="node-list" class="space-y-1 max-h-72 overflow-y-auto"></ul>
-            </section>
+    <div class="max-w-[1440px] mx-auto p-4 grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <!-- Cột trái: Danh sách Node & Hàng chờ duyệt -->
+        <aside class="lg:col-span-3 space-y-4">
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-3">Danh sách Node (PostgreSQL)</h2>
+                <div id="nodeList" class="space-y-2 mb-4"></div>
 
-            <section class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <h2 class="text-sm font-semibold text-emerald-400 border-b border-slate-700 pb-2 mb-2">Add Camera</h2>
-                <form id="add-form" class="space-y-2 text-sm">
-                    <input id="add-id" required maxlength="32" placeholder="NodeID (vd: cam_01)"
-                           class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5 font-mono" autocomplete="off">
-                    <input id="add-name" maxlength="40" placeholder="Tên hiển thị (tuỳ chọn)"
-                           class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5" autocomplete="off">
-                    <button class="w-full bg-emerald-600 hover:bg-emerald-500 rounded py-1.5 font-semibold">Thêm node</button>
-                    <p id="add-msg" class="text-xs text-slate-400 min-h-4"></p>
+                <form id="addNodeForm" class="pt-3 border-t border-slate-800 space-y-2">
+                    <div class="text-xs font-medium text-slate-400">Thêm Node mới</div>
+                    <input id="newNodeId" type="text" placeholder="Mã node (vd: cam_03)" required
+                        class="w-full bg-slate-800 border border-slate-700 rounded px-2.5 py-1.5 text-xs" />
+                    <input id="newNodeName" type="text" placeholder="Tên hiển thị"
+                        class="w-full bg-slate-800 border border-slate-700 rounded px-2.5 py-1.5 text-xs" />
+                    <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium py-1.5 rounded">
+                        + Thêm Node
+                    </button>
                 </form>
-            </section>
+            </div>
 
-            <section class="bg-slate-800 p-4 rounded-xl border border-amber-700/60">
-                <h2 class="text-sm font-semibold text-amber-400 border-b border-slate-700 pb-2 mb-2">
-                    Chờ xác nhận <span id="pending-count" class="text-slate-400 font-normal"></span>
-                </h2>
-                <ul id="pending-list" class="space-y-2"></ul>
-            </section>
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                <h2 class="text-sm font-semibold text-amber-300 uppercase tracking-wider mb-2">Hàng chờ duyệt Node</h2>
+                <div id="pendingList" class="space-y-2 text-xs text-slate-400">Chưa có thiết bị lạ</div>
+            </div>
         </aside>
 
-        <!-- Vùng chính: node đang chọn -->
-        <main class="lg:col-span-3 space-y-4">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-                <h2 id="sel-title" class="text-lg font-semibold text-amber-400">Chưa chọn node</h2>
-                <span id="mode-badge" class="px-4 py-1.5 rounded-full font-bold text-sm bg-slate-600">MODE: --</span>
-            </div>
-
-            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                <section class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-                    <div class="grid grid-cols-2 gap-3 text-center">
-                        <div class="bg-slate-900 p-3 rounded-lg"><div class="text-xs text-slate-400">Nhiệt độ</div><div id="val-temp" class="text-2xl font-bold text-rose-400">-- °C</div></div>
-                        <div class="bg-slate-900 p-3 rounded-lg"><div class="text-xs text-slate-400">Độ ẩm</div><div id="val-humi" class="text-2xl font-bold text-sky-400">-- %</div></div>
-                        <div class="bg-slate-900 p-3 rounded-lg"><div class="text-xs text-slate-400">Ánh sáng</div><div id="val-light" class="text-2xl font-bold text-yellow-300">-- Lux</div></div>
-                        <div class="bg-slate-900 p-3 rounded-lg"><div class="text-xs text-slate-400">Pin</div><div id="val-bat" class="text-2xl font-bold text-emerald-400">-- %</div></div>
+        <!-- Cột chính bên phải -->
+        <main class="lg:col-span-9 space-y-4">
+            <!-- Thông tin tổng quan node đang chọn -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                    <div class="text-xs text-slate-400">Đang giám sát</div>
+                    <div class="flex items-center gap-2">
+                        <h2 id="selectedNodeTitle" class="text-lg font-bold text-white">--</h2>
+                        <span id="selectedNodeBadge" class="text-xs px-2 py-0.5 rounded bg-slate-800">OFFLINE</span>
                     </div>
-                    <div class="bg-slate-900 p-3 rounded-lg space-y-2 text-sm">
-                        <div class="flex justify-between"><span>Trạng thái:</span> <strong id="val-online" class="text-slate-300">--</strong></div>
-                        <div class="flex justify-between"><span>Cập nhật lần cuối:</span> <strong id="val-seen" class="text-slate-300">--</strong></div>
-                        <div class="flex justify-between"><span>Phát hiện người/xe:</span> <strong id="val-motion" class="text-slate-300">--</strong></div>
-                        <div class="flex justify-between"><span>Đèn NeoPixel:</span> <strong id="val-led" class="text-amber-300">--</strong></div>
-                        <div class="flex justify-between"><span>Chẩn đoán:</span> <strong id="val-error" class="text-emerald-400">--</strong></div>
-                    </div>
-                </section>
-
-                <section class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-                    <h3 class="text-sm font-semibold text-purple-400">Camera</h3>
-                    <div class="bg-black rounded-lg h-56 flex items-center justify-center overflow-hidden border border-slate-700 relative">
-                        <img id="cam-view" alt="" class="max-h-full object-contain hidden">
-                        <span id="cam-ph" class="text-xs text-slate-500 absolute">Chưa có ảnh từ node này</span>
-                    </div>
-                    <div class="bg-slate-900 p-2 rounded-lg"><canvas id="envChart" height="120"></canvas></div>
-                </section>
-            </div>
-
-            <section class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-                <h3 class="text-sm font-semibold text-amber-400 border-b border-slate-700 pb-2">Điều khiển thiết bị (node đang chọn)</h3>
-                <div id="control-panel" class="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-3">
-                    <p class="text-xs text-slate-500">Đang chờ dữ liệu từ server…</p>
                 </div>
-            </section>
+                <div class="flex items-center gap-2 text-xs">
+                    <span class="text-slate-400">Chẩn đoán:</span>
+                    <span id="valError" class="px-2.5 py-1 rounded bg-slate-800 text-emerald-300 font-mono">OK</span>
+                </div>
+            </div>
 
-            <section class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <h3 class="text-sm font-semibold text-emerald-400 border-b border-slate-700 pb-2">Định tuyến Cost (từ node đang chọn tới Gateway)</h3>
-                <svg id="topo" viewBox="0 0 400 220" class="w-full h-52 bg-slate-900 rounded-lg mt-3 border border-slate-700"></svg>
-                <div id="routing-info" class="mt-2 text-xs bg-slate-900 p-2 rounded text-emerald-300 font-mono">--</div>
-            </section>
+            <!-- 8 thẻ cảm biến -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                    <div class="text-xs text-slate-400">Nhiệt độ</div>
+                    <div id="valTemp" class="text-xl font-bold text-rose-400 mt-1">-- °C</div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                    <div class="text-xs text-slate-400">Độ ẩm</div>
+                    <div id="valHumi" class="text-xl font-bold text-sky-400 mt-1">-- %</div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                    <div class="text-xs text-slate-400">Ánh sáng</div>
+                    <div id="valLight" class="text-xl font-bold text-amber-300 mt-1">-- Lux</div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                    <div class="text-xs text-slate-400">Chuyển động (PIR)</div>
+                    <div id="valMotion" class="text-xl font-bold text-emerald-400 mt-1">--</div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                    <div class="text-xs text-slate-400">Mưa / Sương mù (Bụi)</div>
+                    <div id="valWeather" class="text-base font-bold text-cyan-300 mt-1">--</div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                    <div class="text-xs text-slate-400">Mức Pin</div>
+                    <div id="valBat" class="text-xl font-bold text-lime-400 mt-1">-- %</div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                    <div class="text-xs text-slate-400">Tín hiệu RSSI / Tải</div>
+                    <div id="valNet" class="text-base font-bold text-purple-300 mt-1">--</div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                    <div class="text-xs text-slate-400">Số gói đã nhận</div>
+                    <div id="valPackets" class="text-xl font-bold text-slate-200 mt-1">0</div>
+                </div>
+            </div>
 
-            <details class="bg-slate-800 rounded-xl border border-slate-700" open>
-                <summary class="cursor-pointer p-3 text-sm font-semibold text-slate-300">Nhật ký sự kiện (để kiểm tra backend)</summary>
-                <pre id="log" class="p-3 pt-0 text-xs font-mono text-slate-400 max-h-56 overflow-y-auto whitespace-pre-wrap"></pre>
-            </details>
+            <!-- Hàng 2: Camera HTTP & Biểu đồ InfluxDB -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <!-- Khung Camera HTTP & PostgreSQL -->
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-2">
+                            <h3 class="text-sm font-semibold text-slate-200">Camera HTTP & Lưu trữ PostgreSQL</h3>
+                            <div class="flex gap-1.5">
+                                <button id="btnModeLatest" class="text-xs px-2 py-1 rounded bg-indigo-600 text-white">Ảnh mới nhất</button>
+                                <button id="btnModeStream" class="text-xs px-2 py-1 rounded bg-slate-800 text-slate-300 hover:bg-slate-700">Luồng MJPEG</button>
+                            </div>
+                        </div>
+
+                        <div class="relative bg-slate-950 border border-slate-800 rounded-lg overflow-hidden aspect-video flex items-center justify-center">
+                            <img id="cameraPreview" alt="Camera feed" class="w-full h-full object-contain hidden" />
+                            <div id="cameraPlaceholder" class="text-xs text-slate-500 text-center px-4">
+                                Chưa có khung hình nào gửi qua HTTP POST tới <code class="text-slate-300">/api/camera/upload</code>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-3 pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                        <div id="cameraMeta" class="text-xs text-slate-400">DB Media: 0 bản ghi</div>
+                        <button id="btnTestHttpUpload" class="text-xs bg-cyan-600 hover:bg-cyan-500 text-white px-3 py-1.5 rounded font-medium">
+                            Test gửi ảnh HTTP POST
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Biểu đồ chuỗi thời gian InfluxDB -->
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-sm font-semibold text-slate-200">Lịch sử cảm biến (InfluxDB)</h3>
+                        <button id="btnRefreshHistory" class="text-xs px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">
+                            Làm mới
+                        </button>
+                    </div>
+                    <div class="h-60">
+                        <canvas id="sensorChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Hàng 3: Định tuyến Cost & Cân bằng tải -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+                    <div>
+                        <h3 class="text-sm font-semibold text-slate-200">Định tuyến Cost & Cân bằng tải (Dijkstra)</h3>
+                        <p id="optimalRouteText" class="text-xs text-emerald-400 font-mono mt-0.5">Tuyến tối ưu: --</p>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <button id="btnSimNormal" class="text-xs px-2.5 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white">
+                            Giả lập Online toàn mạng
+                        </button>
+                        <button id="btnSimOverload" class="text-xs px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white">
+                            Giả lập Node 2 quá tải
+                        </button>
+                        <button id="btnSimFail" class="text-xs px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white">
+                            Giả lập Node 2 sập
+                        </button>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-center">
+                    <div class="lg:col-span-2 bg-slate-950 border border-slate-800 rounded-lg p-2">
+                        <svg id="topologySvg" viewBox="0 0 640 220" class="w-full h-52"></svg>
+                    </div>
+                    <div class="space-y-2 text-xs">
+                        <div class="font-semibold text-slate-300">Các tuyến khả dụng:</div>
+                        <div id="routeAlternatives" class="space-y-1.5 text-slate-400"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Hàng 4: Điều khiển từ xa & Nhật ký sự kiện -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                    <h3 class="text-sm font-semibold text-slate-200 mb-3">Điều khiển thiết bị từ xa</h3>
+                    <div id="controlFormContainer" class="space-y-3"></div>
+                </div>
+
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                    <h3 class="text-sm font-semibold text-slate-200 mb-2">Nhật ký sự kiện & Cảnh báo</h3>
+                    <div id="eventLog" class="h-64 overflow-y-auto bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1.5 text-xs font-mono"></div>
+                </div>
+            </div>
         </main>
     </div>
 
-    <div id="toast" class="fixed bottom-4 right-4 max-w-sm bg-rose-700 text-sm px-4 py-2 rounded-lg shadow-lg hidden"></div>
-    <script src="app.js"></script>
+    <script src="/app.js"></script>
 </body>
 </html>

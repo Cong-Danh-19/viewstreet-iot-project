@@ -1,178 +1,168 @@
 const env = require('../config/env');
+const adafruit = require('../config/adafruit');
 const registry = require('../services/nodeRegistry');
 const stateManager = require('../services/stateManager');
+const controlService = require('../services/controlService');
 const routingService = require('../services/routingService');
-const { defaultConfig: routingConfig } = require('../services/routingService');
-const imageStorage = require('../services/imageStorageService');
+const mediaRepo = require('../repositories/mediaRepo');
 
-function buildNodeList() {
-    const state = stateManager.getState();
-    return registry.list().map((e) => ({
-        id: e.id,
-        name: e.name,
-        source: e.source,
-        addedAt: e.addedAt,
-        online: !!(state[e.id] && state[e.id].online),
-        lastSeen: state[e.id] ? state[e.id].lastSeen : null,
-        packetCount: state[e.id] ? state[e.id].packetCount || 0 : 0,
-    }));
-}
-
-function buildRoutingAll() {
-    const state = stateManager.getState();
-    const out = {};
-    for (const e of registry.list()) {
-        out[e.id] = routingService.evaluateRoutes(state, { source: e.id });
-    }
-    return out;
-}
-
-function registerSocketHandlers(io, { control }) {
-    const camRoom = (id) => `cam:${id}`;
-    const broadcastNodes = () => io.emit('node_list', buildNodeList());
-    const broadcastPending = () => io.emit('pending_nodes', registry.listPending());
-    const broadcastRouting = () => io.emit('routing_update', buildRoutingAll());
-
+module.exports = function registerSocketHandlers(io) {
     io.on('connection', (socket) => {
-        console.log('[WebSocket] Client kết nối:', socket.id);
+        let isAuthorized = !env.ADMIN_TOKEN;
 
-        const isAdmin = !env.ADMIN_TOKEN || (socket.handshake.auth && socket.handshake.auth.token === env.ADMIN_TOKEN);
+        const requireAuth = (cb) => {
+            if (!isAuthorized) {
+                if (typeof cb === 'function') cb({ ok: false, error: 'Thiếu hoặc sai ADMIN_TOKEN' });
+                return false;
+            }
+            return true;
+        };
 
-        const admin = (fn) => (payload, cb) => {
-            const reply = typeof cb === 'function' ? cb : () => {};
-            if (!isAdmin) return reply({ ok: false, error: 'unauthorized', message: 'Cần token quản trị.' });
+        const safe = (fn) => async (...args) => {
             try {
-                fn(payload && typeof payload === 'object' ? payload : {}, reply);
-            } catch (e) {
-                console.error('[WebSocket] Lỗi xử lý sự kiện:', e);
-                reply({ ok: false, error: 'internal', message: 'Lỗi máy chủ.' });
+                await fn(...args);
+            } catch (err) {
+                console.error('[WebSocket] Lỗi xử lý sự kiện:', err);
+                const last = args[args.length - 1];
+                if (typeof last === 'function') last({ ok: false, error: err.message });
             }
         };
 
-        socket.emit('init_dashboard', {
-            isAdmin,
-            controlSchema: control.schema(),
-            currentState: stateManager.getState(),
-            routingInfo: buildRoutingAll(),
-            links: routingConfig.links,
-            nodes: buildNodeList(),
+        // Gửi toàn bộ trạng thái khởi tạo khi client kết nối
+        socket.emit('init_state', {
+            authRequired: Boolean(env.ADMIN_TOKEN),
+            authorized: isAuthorized,
+            networkState: stateManager.getState(),
             pendingNodes: registry.listPending(),
+            controlSchema: controlService.CONTROL_SCHEMA,
+            controlLogs: controlService.getLogs(),
+            links: routingService.defaultConfig.links,
+            autoDirectToGateway: routingService.defaultConfig.autoDirectToGateway,
         });
 
-        socket.on('select_node', (payload, cb) => {
-            const reply = typeof cb === 'function' ? cb : () => {};
-            const id = payload && payload.nodeId;
-            if (typeof id !== 'string' || !registry.isRegistered(id)) {
-                return reply({ ok: false, error: 'not_found', message: 'Không tìm thấy node.' });
+        socket.on('auth', safe((token, cb) => {
+            if (!env.ADMIN_TOKEN || token === env.ADMIN_TOKEN) {
+                isAuthorized = true;
+                if (typeof cb === 'function') cb({ ok: true });
+            } else {
+                isAuthorized = false;
+                if (typeof cb === 'function') cb({ ok: false, error: 'Token quản trị không đúng' });
             }
-            if (socket.data.selectedNode) socket.leave(camRoom(socket.data.selectedNode));
-            socket.data.selectedNode = id;
-            socket.join(camRoom(id));
+        }));
 
-            const allRoutes = buildRoutingAll();
-            socket.emit('node_selected', {
-                nodeId: id,
-                state: stateManager.getNodeState(id),
-                routingInfo: allRoutes[id],
-                history: stateManager.getHistory(id),
-                desired: control.getDesired(id),
-                commands: control.getCommands(id),
-            });
-            if (imageStorage.hasLastFrame(id)) {
-                socket.emit('camera_frame', { nodeId: id, frame: imageStorage.getLastFrame(id) });
+        // Chọn một node để xem lịch sử InfluxDB, định tuyến và danh sách ảnh PostgreSQL
+        socket.on('select_node', safe(async (nodeId, cb) => {
+            const history = await stateManager.getHistory(nodeId, 50);
+            const routing = routingService.evaluateRoutes(stateManager.getState(), { source: nodeId });
+            const mediaList = await mediaRepo.listMedia(nodeId, 12);
+            const desiredState = controlService.getDesiredState(nodeId);
+
+            if (typeof cb === 'function') {
+                cb({ ok: true, nodeId, history, routing, mediaList, desiredState });
             }
-            reply({ ok: true });
+        }));
+
+        // Quản lý phòng nhận luồng camera
+        socket.on('join_camera', (nodeId) => {
+            if (nodeId) socket.join(`cam:${nodeId}`);
         });
 
-        socket.on('add_node', admin(({ nodeId, name }, reply) => {
-            const r = registry.addManual(nodeId, name);
-            if (r.ok) {
-                stateManager.registerNode(r.node);
-                broadcastNodes();
-                broadcastPending();
-                broadcastRouting();
+        socket.on('leave_camera', (nodeId) => {
+            if (nodeId) socket.leave(`cam:${nodeId}`);
+        });
+
+        // Duyệt node mới từ hàng chờ -> lưu PostgreSQL
+        socket.on('approve_node', safe(async ({ nodeId, name }, cb) => {
+            if (!requireAuth(cb)) return;
+            const entry = await registry.approve(nodeId, name);
+            if (!entry) return cb && cb({ ok: false, error: 'nodeId không hợp lệ' });
+
+            stateManager.registerNode(entry);
+            io.emit('network_update', stateManager.getState());
+            io.emit('pending_nodes', registry.listPending());
+            if (typeof cb === 'function') cb({ ok: true, node: entry });
+        }));
+
+        // Thêm node thủ công -> lưu PostgreSQL
+        socket.on('add_node', safe(async ({ nodeId, name }, cb) => {
+            if (!requireAuth(cb)) return;
+            const entry = await registry.addManual(nodeId, name);
+            if (!entry) return cb && cb({ ok: false, error: 'nodeId không hợp lệ (chỉ dùng chữ, số, _, -)' });
+
+            stateManager.registerNode(entry);
+            io.emit('network_update', stateManager.getState());
+            io.emit('pending_nodes', registry.listPending());
+            if (typeof cb === 'function') cb({ ok: true, node: entry });
+        }));
+
+        // Đổi tên node
+        socket.on('rename_node', safe(async ({ nodeId, name }, cb) => {
+            if (!requireAuth(cb)) return;
+            const updated = await registry.rename(nodeId, name);
+            if (!updated) return cb && cb({ ok: false, error: 'Không thể đổi tên node' });
+
+            stateManager.renameNode(nodeId, updated.name);
+            io.emit('network_update', stateManager.getState());
+            if (typeof cb === 'function') cb({ ok: true });
+        }));
+
+        // Xóa node
+        socket.on('remove_node', safe(async (nodeId, cb) => {
+            if (!requireAuth(cb)) return;
+            await registry.remove(nodeId);
+            stateManager.unregisterNode(nodeId);
+            io.emit('network_update', stateManager.getState());
+            io.emit('pending_nodes', registry.listPending());
+            if (typeof cb === 'function') cb({ ok: true });
+        }));
+
+        // Điều khiển từ xa
+        socket.on('send_control', safe(async ({ nodeId, command, params }, cb) => {
+            if (!requireAuth(cb)) return;
+            const result = await controlService.sendCommand(
+                nodeId,
+                command,
+                params,
+                adafruit.publishControl,
+                (timeoutInfo) => {
+                    io.emit('control_ack', timeoutInfo);
+                    io.emit('control_logs', controlService.getLogs());
+                }
+            );
+            if (result.ok) {
+                io.emit('control_logs', controlService.getLogs());
             }
-            reply(r);
+            if (typeof cb === 'function') cb(result);
         }));
 
-        socket.on('approve_node', admin(({ nodeId, name }, reply) => {
-            const r = registry.approve(nodeId, name);
-            if (r.ok) {
-                stateManager.registerNode(r.node);
-                broadcastNodes();
-                broadcastPending();
-                broadcastRouting();
-            }
-            reply(r);
+        // Cập nhật sơ đồ liên kết mạng -> lưu PostgreSQL
+        socket.on('update_links', safe(async ({ links }, cb) => {
+            if (!requireAuth(cb)) return;
+            const ok = await routingService.defaultConfig.setLinks(links);
+            if (!ok) return cb && cb({ ok: false, error: 'Danh sách liên kết không hợp lệ' });
+
+            io.emit('links_updated', routingService.defaultConfig.links);
+            io.emit('network_update', stateManager.getState());
+            if (typeof cb === 'function') cb({ ok: true, links: routingService.defaultConfig.links });
         }));
 
-        socket.on('reject_node', admin(({ nodeId }, reply) => {
-            const r = registry.reject(nodeId);
-            if (r.ok) broadcastPending();
-            reply(r);
+        // Bật/tắt chế độ tự động nối thẳng tới gateway
+        socket.on('set_auto_direct', safe(async ({ enabled }, cb) => {
+            if (!requireAuth(cb)) return;
+            routingService.defaultConfig.autoDirectToGateway = Boolean(enabled);
+            io.emit('network_update', stateManager.getState());
+            if (typeof cb === 'function') cb({ ok: true, autoDirectToGateway: routingService.defaultConfig.autoDirectToGateway });
         }));
 
-        socket.on('rename_node', admin(({ nodeId, name }, reply) => {
-            const r = registry.rename(nodeId, name);
-            if (r.ok) {
-                stateManager.renameNode(nodeId, r.node.name);
-                broadcastNodes();
-            }
-            reply(r);
-        }));
+        // Giả lập thông số node để test định tuyến cân bằng tải
+        socket.on('simulate_node', safe(async (payload, cb) => {
+            if (!requireAuth(cb)) return;
+            const { nodeId, ...patch } = payload || {};
+            const res = stateManager.simulateNode(nodeId, patch);
+            if (!res) return cb && cb({ ok: false, error: `Không tìm thấy node '${nodeId}'` });
 
-        socket.on('remove_node', admin(({ nodeId }, reply) => {
-            const r = registry.remove(nodeId);
-            if (r.ok) {
-                stateManager.unregisterNode(nodeId);
-                control.forget(nodeId);
-                imageStorage.forgetNode(nodeId);
-                io.in(camRoom(nodeId)).emit('node_removed', { nodeId });
-                io.in(camRoom(nodeId)).socketsLeave(camRoom(nodeId));
-                broadcastNodes();
-                broadcastRouting();
-            }
-            reply(r);
-        }));
-
-        socket.on('cmd_hardware', admin((payload, reply) => {
-            const targetId = payload.nodeId || socket.data.selectedNode;
-            const r = control.send(targetId, payload);
-            if (r.ok) console.log(`[Control] ${targetId}: ${payload.command} ${JSON.stringify(payload.value)} (cmd ${r.cmdId})`);
-            reply(r);
-        }));
-
-        // Giả lập lỗi/tải để test cân bằng tải: { nodeId, online?, bat?, load?, rssi? }
-        socket.on('simulate_node', admin((payload, reply) => {
-            const targetId = payload.nodeId || socket.data.selectedNode;
-            if (!registry.isRegistered(targetId)) {
-                return reply({ ok: false, error: 'not_found', message: 'Không tìm thấy node.' });
-            }
-            const res = stateManager.simulateNode(targetId, payload);
-            const allRoutes = buildRoutingAll();
-
-            broadcastNodes();
-            io.emit('state_update', {
-                nodeId: targetId,
-                currentState: res.networkState,
-                routingInfo: allRoutes[targetId],
-                newRecord: stateManager.getHistory(targetId).slice(-1)[0] || res.node,
-            });
-            io.emit('routing_update', allRoutes);
-            reply({ ok: true, node: res.node, routing: allRoutes });
-        }));
-
-        // Cập nhật danh sách liên kết trung gian giữa các node: { links: [['cam_03', 'cam_005'], ...] }
-        socket.on('update_links', admin(({ links }, reply) => {
-            if (!routingConfig.setLinks(links)) {
-                return reply({ ok: false, error: 'invalid_links', message: 'Danh sách liên kết không hợp lệ.' });
-            }
-            broadcastRouting();
-            reply({ ok: true, links: routingConfig.links });
+            io.emit('network_update', res.networkState);
+            if (typeof cb === 'function') cb({ ok: true, node: res.node });
         }));
     });
-
-    return { buildNodeList, buildRoutingAll };
-}
-
-module.exports = { registerSocketHandlers, buildNodeList, buildRoutingAll };
+};

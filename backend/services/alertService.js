@@ -1,70 +1,81 @@
+const https = require('https');
 const env = require('../config/env');
 
-const cooldowns = new Map(); // `${nodeId}:${type}` -> timestamp gửi gần nhất
+const COOLDOWN_MS = 5 * 60 * 1000;
+const lastAlertAt = new Map();
 
-function canSend(nodeId, type) {
-    const key = `${nodeId}:${type}`;
-    const last = cooldowns.get(key) || 0;
-    if (Date.now() - last < env.ALERT_COOLDOWN_MS) return false;
-    cooldowns.set(key, Date.now());
+function canSend(key) {
+    const now = Date.now();
+    const prev = lastAlertAt.get(key) || 0;
+    if (now - prev < COOLDOWN_MS) return false;
+    lastAlertAt.set(key, now);
     return true;
 }
 
-async function notify(nodeId, type, message, emit) {
-    if (!canSend(nodeId, type)) return;
-
-    const alertPayload = { nodeId, type, message, ts: Date.now() };
-    console.warn(`[ALERT][${type.toUpperCase()}] ${message}`);
-    if (emit) emit('system_alert', alertPayload);
-
+function sendTelegram(text) {
     if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return;
+    const payload = JSON.stringify({
+        chat_id: env.TELEGRAM_CHAT_ID,
+        text,
+    });
 
-    try {
-        const url = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`;
-        await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                chat_id: env.TELEGRAM_CHAT_ID,
-                text: `⚠️ [Viewstreets] ${message}`,
-            }),
-        });
-    } catch (e) {
-        console.error('[AlertService] Lỗi gửi Telegram:', e.message);
-    }
+    const req = https.request({
+        hostname: 'api.telegram.org',
+        path: `/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+        },
+    });
+    req.on('error', (err) => console.error('[Telegram] Lỗi gửi tin:', err.message));
+    req.write(payload);
+    req.end();
 }
 
-function checkTelemetryAlerts(nodeState, desiredConfig = {}, emit) {
-    const thresholds = desiredConfig.thresholds || {};
-    const batLowLimit = Number.isFinite(thresholds.bat_low) ? thresholds.bat_low : 20;
+function emitAlert(type, nodeId, message) {
+    const key = `${nodeId}:${type}`;
+    if (!canSend(key)) return null;
 
-    if (typeof nodeState.bat === 'number' && nodeState.bat > 0 && nodeState.bat <= batLowLimit) {
-        notify(
-            nodeState.id,
-            'low_battery',
-            `Node "${nodeState.name}" (${nodeState.id}) pin yếu: ${nodeState.bat}% (ngưỡng ${batLowLimit}%).`,
-            emit
-        );
-    }
-
-    if (nodeState.error && nodeState.error !== 'OK' && nodeState.error !== 'Đang chờ thiết bị...') {
-        notify(
-            nodeState.id,
-            'device_error',
-            `Node "${nodeState.name}" (${nodeState.id}) báo lỗi: ${nodeState.error}`,
-            emit
-        );
-    }
+    const alertObj = {
+        type,
+        nodeId,
+        message,
+        ts: Date.now(),
+        time: new Date().toLocaleTimeString('vi-VN'),
+    };
+    console.warn(`[ALERT][${type.toUpperCase()}] ${nodeId}: ${message}`);
+    sendTelegram(`[Viewstreets Alert] ${nodeId} - ${message}`);
+    return alertObj;
 }
 
-function notifyOffline(nodeState, emit) {
-    if (!nodeState) return;
-    notify(
-        nodeState.id,
-        'offline',
-        `Node "${nodeState.name}" (${nodeState.id}) đã mất kết nối (Offline).`,
-        emit
-    );
+function checkTelemetryAlerts(node) {
+    const alerts = [];
+    if (!node) return alerts;
+
+    if (Number.isFinite(node.bat) && node.bat > 0 && node.bat < env.LOW_BAT_THRESHOLD) {
+        const a = emitAlert('low_battery', node.id, `Pin yếu (${node.bat}% < ${env.LOW_BAT_THRESHOLD}%)`);
+        if (a) alerts.push(a);
+    }
+
+    if (node.error && node.error !== 'OK' && node.error !== 'Đang chờ thiết bị...') {
+        const a = emitAlert('device_error', node.id, `Lỗi thiết bị: ${node.error}`);
+        if (a) alerts.push(a);
+    }
+
+    if (Number.isFinite(node.dust) && node.dust > 150) {
+        const a = emitAlert('fog_dust', node.id, `Sương mù / bụi dày đặc (${node.dust} µg/m³), tăng độ sáng đèn`);
+        if (a) alerts.push(a);
+    }
+
+    return alerts;
 }
 
-module.exports = { checkTelemetryAlerts, notifyOffline };
+function alertOffline(nodeId) {
+    return emitAlert('offline', nodeId, 'Node mất kết nối (Offline)');
+}
+
+module.exports = {
+    checkTelemetryAlerts,
+    alertOffline,
+};
