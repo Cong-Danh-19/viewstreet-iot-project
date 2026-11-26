@@ -1,0 +1,61 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: viewstreet-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-viewstreet}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-viewstreet123}
+      POSTGRES_DB: ${POSTGRES_DB:-viewstreet}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-viewstreet} -d ${POSTGRES_DB:-viewstreet}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: viewstreet-influxdb
+    restart: unless-stopped
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: viewstreet12345
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUX_ORG:-viewstreet}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUX_BUCKET:-sensors}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:-viewstreet-super-secret-influx-token}
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: .
+    container_name: viewstreet-web
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-viewstreet}:${POSTGRES_PASSWORD:-viewstreet123}@postgres:5432/${POSTGRES_DB:-viewstreet}
+      INFLUX_URL: http://influxdb:8086
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:
+  influxdb_data:

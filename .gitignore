@@ -1,3 +1,7 @@
 node_modules/
 .env
 .DS_Store
+# Dữ liệu sinh ra khi chạy
+backend/data/images/
+backend/data/control_logs.json
+backend/data/node_controls.json

@@ -1,62 +1,72 @@
-const express = require('express');
 const http = require('http');
+const express = require('express');
 const { Server } = require('socket.io');
-require('dotenv').config();
-
-const { client, FEEDS } = require('./config/adafruit');
+const env = require('./config/env');
+const { initDatabases } = require('./config/db');
+const adafruit = require('./config/adafruit');
+const registry = require('./services/nodeRegistry');
 const stateManager = require('./services/stateManager');
+const controlService = require('./services/controlService');
 const routingService = require('./services/routingService');
+const alertService = require('./services/alertService');
+const registerMqttHandlers = require('./handlers/mqttHandler');
+const registerSocketHandlers = require('./handlers/socketHandler');
+const createCameraRoutes = require('./routes/cameraRoutes');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// Phục vụ giao diện tĩnh từ thư mục frontend
-app.use(express.static('frontend'));
+// Parse JSON cho API (hỗ trợ payload Base64 lên tới 15MB)
+app.use(express.json({ limit: '15mb' }));
 
-// Lắng nghe dữ liệu thực tế từ Adafruit IO MQTT Client
-client.on('message', (topic, message) => {
-    const payloadStr = message.toString();
+// Phục vụ giao diện Web Dashboard
+app.use(express.static(env.FRONTEND_DIR));
 
-    if (topic === FEEDS.TELEMETRY) {
-        try {
-            const data = JSON.parse(payloadStr);
-            
-            // Cập nhật trạng thái Node 1 và tự động ghi vào history.json
-            const { networkState, newRecord } = stateManager.updateNode1(data);
-            
-            // Tính toán định tuyến cân bằng tải
-            const routingInfo = routingService.evaluateRoutes(networkState);
-            
-            // Phát tán dữ liệu thật kèm bản ghi lịch sử mới xuống WebSocket
-            io.emit('state_update', { currentState: networkState, routingInfo, newRecord });
-        } catch (e) {
-            console.error('[JSON Parse Error]:', e.message);
-        }
-    } else if (topic === FEEDS.CAMERA) {
-        io.emit('camera_frame', payloadStr);
-    }
-});
-
-// Xử lý kết nối WebSocket từ Client
-io.on('connection', (socket) => {
-    console.log('[WebSocket] Client đã kết nối:', socket.id);
-    
-    // Gửi trạng thái hiện tại, định tuyến và toàn bộ lịch sử cũ từ file JSON cho client
-    const currentState = stateManager.getState();
-    const routingInfo = routingService.evaluateRoutes(currentState);
-    const history = stateManager.getHistory();
-    
-    socket.emit('init_dashboard', { currentState, routingInfo, history });
-
-    // Nhận lệnh điều khiển từ web -> Publish lên Adafruit IO xuống ESP32
-    socket.on('cmd_hardware', (cmdObj) => {
-        console.log('[Web Control -> Adafruit]:', cmdObj);
-        client.publish(FEEDS.CONTROL, JSON.stringify(cmdObj));
+// API Healthcheck cho Docker / giám sát
+app.get('/api/health', (req, res) => {
+    res.json({
+        ok: true,
+        mqttConnected: adafruit.isConnected(),
+        nodeCount: registry.list().length,
+        ts: Date.now(),
     });
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`>>> Modular Backend Server đang chạy tại: http://localhost:${PORT}`);
+// API HTTP nhận và phát hình ảnh/video từ Camera lưu trong PostgreSQL
+app.use('/api/camera', createCameraRoutes(io));
+
+// Đăng ký luồng MQTT và WebSocket
+registerMqttHandlers(io);
+registerSocketHandlers(io);
+
+// Vòng lặp 5 giây quét node mất kết nối
+setInterval(() => {
+    const offlineIds = stateManager.sweepOffline(env.OFFLINE_AFTER_MS);
+    if (offlineIds.length > 0) {
+        io.emit('network_update', stateManager.getState());
+        for (const id of offlineIds) {
+            const alert = alertService.alertOffline(id);
+            if (alert) io.emit('system_alert', alert);
+        }
+    }
+}, 5000);
+
+async function start() {
+    await initDatabases();
+    await registry.init();
+    stateManager.init();
+    await controlService.init();
+    await routingService.initRouting();
+
+    adafruit.connect();
+
+    server.listen(env.PORT, () => {
+        console.log(`[Server] Viewstreets đang chạy tại http://localhost:${env.PORT}`);
+    });
+}
+
+start().catch((err) => {
+    console.error('[Server] Khởi động thất bại:', err);
+    process.exit(1);
 });
