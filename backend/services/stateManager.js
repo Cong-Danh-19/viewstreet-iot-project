@@ -1,76 +1,132 @@
-const fs = require('fs');
-const path = require('path');
+const registry = require('./nodeRegistry');
+const sensorRepo = require('../repositories/sensorRepo');
 
-const DATA_DIR = path.join(__dirname, '../data');
-const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
+const nodes = new Map();
 
-// Tự động tạo thư mục 'data' và file 'history.json' nếu chưa tồn tại
-if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-if (!fs.existsSync(HISTORY_FILE)) {
-    fs.writeFileSync(HISTORY_FILE, JSON.stringify([], null, 2), 'utf8');
-}
-
-// Trạng thái hệ thống (tập trung vào thiết bị thật Node 1)
-let networkState = {
-    node_1: { 
-        id: 'Node 1 (Real)', 
-        temp: 0, 
-        humi: 0, 
-        light: 0, 
-        motion: 0, 
-        bat: 0, 
-        mode: 'NORMAL', 
-        ledLevel: 0, 
-        error: 'Đang chờ thiết bị...', 
-        online: false, 
-        rssi: -50, 
-        load: 0 
-    }
-};
-
-// Đọc danh sách lịch sử từ file JSON
-function getHistory() {
-    try {
-        if (!fs.existsSync(HISTORY_FILE)) return [];
-        const raw = fs.readFileSync(HISTORY_FILE, 'utf8');
-        return JSON.parse(raw);
-    } catch (e) {
-        return [];
-    }
-}
-
-// Thêm bản ghi mới vào tệp lịch sử (giới hạn tối đa 50 bản ghi gần nhất)
-function appendHistory(data) {
-    const history = getHistory();
-    const record = {
-        time: new Date().toLocaleTimeString('vi-VN'),
-        date: new Date().toLocaleDateString('vi-VN'),
-        temp: data.temp,
-        humi: data.humi,
-        light: data.light,
-        bat: data.bat,
-        motion: data.motion,
-        error: data.error || 'OK'
+function blankState(entry) {
+    return {
+        id: entry.id,
+        name: entry.name,
+        temp: 0,
+        humi: 0,
+        light: 0,
+        motion: 0,
+        rain: 0,
+        dust: 0,
+        bat: 100,
+        mode: 'AUTO',
+        ledLevel: 0,
+        error: 'Đang chờ thiết bị...',
+        online: false,
+        rssi: -50,
+        load: 0,
+        lastSeen: null,
+        packetCount: 0,
     };
-    
-    history.push(record);
-    if (history.length > 50) history.shift(); // Giữ tối đa 50 dòng để tối ưu dung lượng file
-    
-    fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2), 'utf8');
-    return record;
 }
 
-function getState() {
-    return networkState;
+function init() {
+    nodes.clear();
+    for (const entry of registry.list()) {
+        nodes.set(entry.id, blankState(entry));
+    }
 }
 
-// Cập nhật dữ liệu thật từ Node 1 và tự động ghi log lịch sử
-function updateNode1(newData) {
-    networkState.node_1 = { ...networkState.node_1, ...newData, online: true };
-    const newRecord = appendHistory(networkState.node_1);
-    return { networkState, newRecord };
+function registerNode(entry) {
+    if (!nodes.has(entry.id)) {
+        nodes.set(entry.id, blankState(entry));
+    }
+    return nodes.get(entry.id);
 }
 
-module.exports = { getState, getHistory, updateNode1 };
+function unregisterNode(id) {
+    if (!id || id === 'gateway') return;
+    nodes.delete(id);
+}
+
+function removeNode(id) {
+    unregisterNode(id);
+}
+
+function renameNode(id, name) {
+    const st = nodes.get(id);
+    if (st) st.name = name;
+}
+
+const getState = () => Object.fromEntries(nodes);
+const getNodeState = (id) => nodes.get(id) || null;
+
+/**
+ * Cập nhật số liệu cảm biến thực tế vào RAM và ghi chuỗi thời gian vào InfluxDB.
+ */
+async function updateNode(id, data) {
+    const current = nodes.get(id);
+    if (!current) return null;
+
+    const { nodeId, id: _id, name: _name, online: _online, lastSeen: _lastSeen, ...fields } = data;
+    const next = {
+        ...current,
+        ...fields,
+        id,
+        name: current.name,
+        online: true,
+        lastSeen: Date.now(),
+        packetCount: (current.packetCount || 0) + 1,
+    };
+    if (fields.error === undefined && current.error === 'Đang chờ thiết bị...') {
+        next.error = 'OK';
+    }
+
+    nodes.set(id, next);
+
+    try {
+        await sensorRepo.writeTelemetry(id, next);
+    } catch (err) {
+        console.error(`[InfluxDB] Không ghi được telemetry của ${id}:`, err.message);
+    }
+
+    return { networkState: getState(), node: next };
+}
+
+/**
+ * Cập nhật thời gian hoạt động online khi node gửi ảnh/video thật qua HTTP.
+ */
+function touchOnline(id) {
+    const current = nodes.get(id);
+    if (!current) return null;
+    current.online = true;
+    current.lastSeen = Date.now();
+    current.packetCount = (current.packetCount || 0) + 1;
+    if (current.error === 'Đang chờ thiết bị...') current.error = 'OK';
+    return getState();
+}
+
+function sweepOffline(timeoutMs) {
+    const now = Date.now();
+    const changed = [];
+    for (const [id, st] of nodes) {
+        if (st.online && st.lastSeen && now - st.lastSeen > timeoutMs) {
+            st.online = false;
+            changed.push(id);
+        }
+    }
+    return changed;
+}
+
+async function getHistory(id, limit = 50) {
+    return sensorRepo.getSensorHistory(id, limit);
+}
+
+module.exports = {
+    init,
+    getState,
+    getNodeState,
+    getHistory,
+    updateNode,
+    touchOnline,
+    registerNode,
+    unregisterNode,
+    removeNode,
+    renameNode,
+    sweepOffline,
+};

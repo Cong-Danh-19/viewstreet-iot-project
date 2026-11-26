@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Viewstreets — Multi-Node & Camera Control Console</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen p-4">
+  <div class="max-w-7xl mx-auto space-y-4">
+    <!-- Header -->
+    <header class="flex flex-wrap items-center justify-between gap-3 bg-slate-900 border border-slate-800 rounded-xl p-4">
+      <div>
+        <h1 class="text-xl font-bold text-sky-400">VIEWSTREETS — MULTI-NODE & CAMERA CONTROL CONSOLE</h1>
+        <p class="text-xs text-slate-400">Quản lý Node/Camera không giới hạn · Xác nhận Node mới · Điều khiển Đèn & Camera qua Adafruit IO</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <span id="ws-status" class="px-3 py-1 rounded-full text-xs font-semibold bg-amber-900/60 text-amber-300 border border-amber-700/50">
+          WS: Đang kết nối...
+        </span>
+        <span id="admin-badge" class="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-900/60 text-emerald-300 border border-emerald-700/50">
+          Quyền: Admin
+        </span>
+      </div>
+    </header>
+
+    <!-- Hàng chờ NodeID mới cần xác nhận -->
+    <section id="pending-section" class="bg-amber-950/30 border border-amber-700/50 rounded-xl p-4 hidden">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-sm font-bold uppercase tracking-wide text-amber-300">
+          NodeID mới gửi lên — Chờ xác nhận (<span id="pending-count">0</span>)
+        </h2>
+      </div>
+      <div id="pending-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+    </section>
+
+    <!-- Lưới chính 3 cột -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+      <!-- Cột trái (3/12): Danh sách Node + Add Camera -->
+      <aside class="lg:col-span-3 bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-4">
+        <div>
+          <h2 class="text-sm font-bold uppercase text-sky-400 border-b border-slate-800 pb-2">
+            Add Camera / NodeID
+          </h2>
+          <form id="add-node-form" class="mt-3 space-y-2">
+            <input
+              id="input-node-id"
+              type="text"
+              placeholder="nodeId (vd: cam_02, node_2)"
+              pattern="[a-z0-9][a-z0-9_-]{0,31}"
+              title="Chữ thường, số, '_' hoặc '-', tối đa 32 ký tự"
+              required
+              class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-500"
+            />
+            <input
+              id="input-node-name"
+              type="text"
+              placeholder="Tên hiển thị (tuỳ chọn)"
+              class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-500"
+            />
+            <button
+              type="submit"
+              class="w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm py-2 rounded-lg transition"
+            >
+              + Add Camera
+            </button>
+          </form>
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+            <h2 class="text-sm font-bold uppercase text-emerald-400">
+              Danh sách Node (<span id="node-count">0</span>)
+            </h2>
+          </div>
+          <div id="node-list" class="mt-2 space-y-2 max-h-[28rem] overflow-y-auto pr-1"></div>
+        </div>
+      </aside>
+
+      <!-- Cột giữa (5/12): Trạng thái Node đang chọn + Điều khiển + Định tuyến -->
+      <section class="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-4">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+          <div>
+            <div class="text-xs text-slate-400">Node đang xem</div>
+            <h2 id="selected-node-title" class="text-lg font-bold text-white">Chưa chọn node</h2>
+          </div>
+          <div class="flex items-center gap-2">
+            <span id="selected-online-badge" class="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-800 text-slate-400">
+              OFFLINE
+            </span>
+            <span id="selected-mode-badge" class="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-700 text-white">
+              MODE: --
+            </span>
+          </div>
+        </div>
+
+        <!-- Thông số cảm biến -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+          <div class="bg-slate-950 border border-slate-800 rounded-lg p-2.5">
+            <div class="text-[11px] text-slate-400">Nhiệt độ</div>
+            <div id="val-temp" class="text-lg font-bold text-rose-400">-- °C</div>
+          </div>
+          <div class="bg-slate-950 border border-slate-800 rounded-lg p-2.5">
+            <div class="text-[11px] text-slate-400">Độ ẩm</div>
+            <div id="val-humi" class="text-lg font-bold text-sky-400">-- %</div>
+          </div>
+          <div class="bg-slate-950 border border-slate-800 rounded-lg p-2.5">
+            <div class="text-[11px] text-slate-400">Ánh sáng</div>
+            <div id="val-light" class="text-lg font-bold text-yellow-300">--</div>
+          </div>
+          <div class="bg-slate-950 border border-slate-800 rounded-lg p-2.5">
+            <div class="text-[11px] text-slate-400">Pin / RSSI</div>
+            <div id="val-bat-rssi" class="text-sm font-bold text-emerald-400 mt-1">--% · --dBm</div>
+          </div>
+        </div>
+
+        <div class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1.5 text-xs">
+          <div class="flex justify-between">
+            <span class="text-slate-400">Vật cản / Chuyển động:</span>
+            <strong id="val-motion" class="text-slate-200">--</strong>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-slate-400">Mức sáng đèn:</span>
+            <strong id="val-led" class="text-amber-300">--</strong>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-slate-400">Chẩn đoán / Lỗi:</span>
+            <strong id="val-error" class="text-emerald-400">--</strong>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-slate-400">Last seen:</span>
+            <strong id="val-last-seen" class="text-slate-300 font-mono">--</strong>
+          </div>
+        </div>
+
+        <!-- Định tuyến Cost -->
+        <div class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1">
+          <div class="text-xs font-semibold text-indigo-300">Định tuyến Cost (routingService)</div>
+          <div id="val-route" class="text-xs font-mono text-emerald-300 break-all">--</div>
+          <div id="val-route-alt" class="text-[11px] font-mono text-slate-400 break-all"></div>
+        </div>
+
+        <!-- Khu vực điều khiển thiết bị qua controlService -> Adafruit IO -->
+        <div class="space-y-2.5">
+          <div class="text-xs font-semibold uppercase text-slate-400">
+            Điều khiển từ xa Node đang chọn (viewstreet.control)
+          </div>
+
+          <!-- 1. Điều chỉnh độ sáng đèn -->
+          <div class="bg-slate-950 border border-slate-800 rounded-lg p-2.5 space-y-1.5">
+            <div class="flex items-center justify-between text-xs">
+              <span class="text-slate-300 font-semibold">Độ sáng đèn</span>
+              <span id="led-slider-val" class="font-mono text-amber-300">50%</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <input id="led-slider" type="range" min="0" max="100" value="50"
+                oninput="document.getElementById('led-slider-val').textContent = this.value + '%'"
+                class="flex-1 accent-amber-400" />
+              <button type="button" onclick="applyLedBrightness(0)"
+                class="bg-slate-800 hover:bg-slate-700 px-2.5 py-1 rounded text-xs">
+                Tắt (0%)
+              </button>
+              <button type="button" onclick="applyLedBrightness()"
+                class="bg-amber-600 hover:bg-amber-500 px-3 py-1 rounded text-xs font-semibold">
+                Đặt đèn
+              </button>
+            </div>
+          </div>
+
+          <!-- 2. Điều khiển Camera (chụp 1 ảnh, chụp liên tục, bật/tắt camera) -->
+          <div class="bg-slate-950 border border-slate-800 rounded-lg p-2.5 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-semibold text-slate-300">Điều khiển Camera</span>
+              <div class="flex gap-1.5">
+                <button type="button" onclick="setCameraPower(true)"
+                  class="bg-emerald-800/80 hover:bg-emerald-700 px-2 py-0.5 rounded text-[11px]">
+                  Bật Cam
+                </button>
+                <button type="button" onclick="setCameraPower(false)"
+                  class="bg-slate-800 hover:bg-slate-700 px-2 py-0.5 rounded text-[11px]">
+                  Tắt Cam
+                </button>
+              </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-2 text-xs">
+              <button type="button" onclick="captureOnce()"
+                class="bg-sky-600 hover:bg-sky-500 py-1.5 px-3 rounded font-semibold">
+                Chụp 1 ảnh
+              </button>
+              <label class="flex items-center gap-1 text-slate-400">
+                Chu kỳ (ms):
+                <input id="burst-interval" type="number" min="300" max="300000" step="100" value="2000"
+                  class="w-20 bg-slate-900 border border-slate-700 rounded px-2 py-1 font-mono text-slate-200" />
+              </label>
+              <button type="button" onclick="startBurstCapture()"
+                class="bg-emerald-600 hover:bg-emerald-500 py-1.5 px-3 rounded font-semibold">
+                Chụp liên tục
+              </button>
+              <button type="button" onclick="stopBurstCapture()"
+                class="bg-rose-700 hover:bg-rose-600 py-1.5 px-3 rounded font-semibold">
+                Dừng
+              </button>
+            </div>
+          </div>
+
+          <!-- 3. Chế độ hoạt động & Cập nhật ngưỡng -->
+          <div class="bg-slate-950 border border-slate-800 rounded-lg p-2.5 space-y-2">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <span class="text-xs font-semibold text-slate-300">Chế độ & Ngưỡng</span>
+              <div class="flex gap-1.5">
+                <button type="button" onclick="setNodeMode('AUTO')" class="bg-indigo-700 hover:bg-indigo-600 px-2.5 py-1 rounded text-xs">AUTO</button>
+                <button type="button" onclick="setNodeMode('MANUAL')" class="bg-slate-700 hover:bg-slate-600 px-2.5 py-1 rounded text-xs">MANUAL</button>
+                <button type="button" onclick="toggleNodeMode()" class="bg-amber-700 hover:bg-amber-600 px-2.5 py-1 rounded text-xs">Toggle Debug</button>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-2 text-xs">
+              <label class="flex items-center justify-between bg-slate-900 border border-slate-800 rounded px-2 py-1">
+                <span class="text-slate-400">Ngưỡng sáng:</span>
+                <input id="thresh-light" type="number" value="300" class="w-16 bg-transparent text-right font-mono text-slate-200 focus:outline-none" />
+              </label>
+              <label class="flex items-center justify-between bg-slate-900 border border-slate-800 rounded px-2 py-1">
+                <span class="text-slate-400">Pin yếu (%):</span>
+                <input id="thresh-bat" type="number" min="1" max="100" value="20" class="w-14 bg-transparent text-right font-mono text-slate-200 focus:outline-none" />
+              </label>
+            </div>
+            <button type="button" onclick="applyThresholds()"
+              class="w-full bg-slate-800 hover:bg-slate-700 py-1.5 rounded text-xs font-semibold">
+              Cập nhật ngưỡng cảm biến
+            </button>
+          </div>
+
+          <!-- 4. Gửi lệnh JSON nâng cao -->
+          <div class="flex gap-2">
+            <input
+              id="custom-cmd-json"
+              type="text"
+              value='{"command":"ota_update","url":"http://example.com/fw.bin"}'
+              class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-mono"
+            />
+            <button type="button" onclick="sendCustomCmd()" class="bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded-lg text-xs font-semibold">
+              Gửi JSON
+            </button>
+          </div>
+        </div>
+
+        <!-- Đổi tên / Xóa node -->
+        <div class="pt-2 border-t border-slate-800 flex flex-wrap gap-2">
+          <input
+            id="rename-input"
+            type="text"
+            placeholder="Tên mới cho node..."
+            class="flex-1 min-w-[140px] bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs"
+          />
+          <button type="button" onclick="renameSelectedNode()" class="bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded-lg text-xs font-semibold">
+            Đổi tên
+          </button>
+          <button type="button" onclick="removeSelectedNode()" class="bg-rose-700 hover:bg-rose-600 px-3 py-1.5 rounded-lg text-xs font-semibold">
+            Xoá Node
+          </button>
+        </div>
+      </section>
+
+      <!-- Cột phải (4/12): Camera của Node đang chọn + Biểu đồ -->
+      <section class="lg:col-span-4 bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-4">
+        <div>
+          <div class="flex items-center justify-between border-b border-slate-800 pb-2 mb-2">
+            <h2 class="text-sm font-bold uppercase text-purple-400">Camera Preview</h2>
+            <span id="cam-node-label" class="text-xs font-mono text-slate-400">--</span>
+          </div>
+          <div class="bg-black border border-slate-800 rounded-lg h-52 flex items-center justify-center overflow-hidden">
+            <img id="cam-view" alt="Chưa có khung hình camera" class="max-h-full max-w-full object-contain hidden" />
+            <span id="cam-placeholder" class="text-xs text-slate-500 px-4 text-center">
+              Chưa có khung hình cho node này (bấm "Chụp 1 ảnh" hoặc "Chụp liên tục")
+            </span>
+          </div>
+        </div>
+
+        <div>
+          <h2 class="text-sm font-bold uppercase text-sky-400 border-b border-slate-800 pb-2 mb-2">
+            Biểu đồ Môi trường (Node đang chọn)
+          </h2>
+          <div class="bg-slate-950 border border-slate-800 rounded-lg p-2">
+            <canvas id="envChart" height="190"></canvas>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Bảng lịch sử của Node đang chọn -->
+    <section class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
+        <h2 class="text-sm font-bold uppercase text-sky-400">
+          Lịch sử Telemetry (<span id="history-node-label">--</span>)
+        </h2>
+        <span id="history-count" class="text-xs text-slate-400">0 bản ghi</span>
+      </div>
+      <div class="overflow-x-auto max-h-60 overflow-y-auto">
+        <table class="w-full text-left text-xs text-slate-300">
+          <thead class="bg-slate-950 text-slate-400 uppercase sticky top-0">
+            <tr>
+              <th class="p-2">Thời gian</th>
+              <th class="p-2">Nhiệt độ</th>
+              <th class="p-2">Độ ẩm</th>
+              <th class="p-2">Ánh sáng</th>
+              <th class="p-2">Pin</th>
+              <th class="p-2">Chuyển động</th>
+              <th class="p-2">Trạng thái</th>
+            </tr>
+          </thead>
+          <tbody id="history-tbody" class="divide-y divide-slate-800"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Log sự kiện WebSocket / Ack -->
+    <section class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-xs font-semibold text-slate-400 uppercase">Event / Control Ack Log</span>
+        <button type="button" onclick="clearEventLog()" class="text-[11px] text-slate-400 hover:text-white">Xoá log</button>
+      </div>
+      <div id="event-log" class="bg-slate-950 border border-slate-800 rounded-lg p-2 h-28 overflow-y-auto font-mono text-[11px] text-slate-300 space-y-1"></div>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

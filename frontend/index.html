@@ -2,97 +2,336 @@
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
-    <title>Viewstreets Modular Dashboard</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ViewStreet</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
+    <style>
+        :root {
+            --bg: #f4f3ef; --card: #fff; --line: #e2dfd8; --text: #1d1d1b; --muted: #75736d;
+            --accent: #1f5f8b; --ok: #2f7d4f; --warn: #b7791f; --err: #b8322a;
+            --mono: "IBM Plex Mono", monospace;
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "IBM Plex Sans", system-ui, sans-serif; }
+        .wrap { max-width: 1280px; margin: 0 auto; padding: 20px 16px 40px; }
+        .hidden { display: none !important; }
+        .mono { font-family: var(--mono); }
+        .muted { color: var(--muted); }
+
+        header { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: flex-end;
+                 border-bottom: 2px solid var(--text); padding-bottom: 12px; margin-bottom: 16px; }
+        header h1 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
+        header p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+        .hstatus { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; font-size: 12px; }
+        .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #c9c6be; vertical-align: middle; margin-right: 6px; }
+        .dot.ok { background: var(--ok); } .dot.err { background: var(--err); } .dot.warn { background: var(--warn); }
+
+        button { font: inherit; font-size: 13px; border: 1px solid var(--text); background: var(--card); color: var(--text);
+                 padding: 5px 12px; border-radius: 4px; cursor: pointer; }
+        button:hover { background: var(--text); color: #fff; }
+        button.sm { font-size: 11px; padding: 2px 8px; }
+
+        .notice { border: 1px solid var(--err); border-left-width: 4px; background: #fff; padding: 10px 12px; margin-bottom: 16px; font-size: 13px; }
+
+        .grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
+        @media (min-width: 900px) {
+            .grid[data-active="overview"] { grid-template-columns: 3fr 2fr; }
+            .grid[data-active="camera"]   { grid-template-columns: minmax(0, 1100px); justify-content: center; }
+            .grid[data-active="history"]  { grid-template-columns: 3fr 2fr; }
+            .grid[data-active="routing"]  { grid-template-columns: 3fr 2fr; }
+        }
+        .grid > [data-tab] { display: none; }
+        .grid[data-active="overview"] > [data-tab="overview"],
+        .grid[data-active="camera"]   > [data-tab="camera"],
+        .grid[data-active="history"]  > [data-tab="history"],
+        .grid[data-active="routing"]  > [data-tab="routing"] { display: block; }
+        nav.tabbar { display: flex; gap: 24px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+        nav.tabbar button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 8px 0; color: var(--muted); font-size: 14px; }
+        nav.tabbar button:hover { background: none; color: var(--text); }
+        nav.tabbar button.active { color: var(--text); border-bottom-color: var(--text); font-weight: 500; }
+        nav.tabbar .count { font-family: var(--mono); font-size: 11px; color: #fff; background: var(--err); border-radius: 8px; padding: 0 6px; margin-left: 4px; }
+        .card { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 16px; }
+        .card + .card { margin-top: 16px; }
+        .label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 500; margin: 0 0 12px; }
+        .row { display: flex; justify-content: space-between; align-items: center; }
+
+        .metrics { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+        .metric { padding: 10px 12px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+        .metric .k { font-size: 12px; color: var(--muted); }
+        .metric .v { font-family: var(--mono); font-size: 24px; font-weight: 500; }
+        .metric .s { font-size: 12px; color: var(--muted); }
+        .bar { height: 4px; background: var(--line); margin-top: 6px; } .bar > div { height: 4px; background: var(--ok); }
+
+        .lcd { font-family: var(--mono); background: #c7d3a0; color: #26301a; padding: 10px 12px; border-radius: 3px;
+               white-space: pre; font-size: 15px; line-height: 1.5; border: 6px solid #2b2b2b; }
+
+        .pixels { display: flex; gap: 10px; }
+        .pixel { flex: 1; height: 14px; background: #e7e5df; border-radius: 2px; transition: background .3s; }
+        .pixel.on { background: #e8b923; }
+
+        .cam-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 14px; }
+        @media (max-width: 720px) { .cam-layout { grid-template-columns: 1fr; } }
+        .cam-input { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 3px; margin-bottom: 6px; background: var(--card); color: var(--text); }
+        .cam-list { list-style: none; margin: 0 0 10px; padding: 0; border: 1px solid var(--line); border-radius: 4px; }
+        .cam-nodes { max-height: 300px; overflow: auto; }
+        .cam-list li { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); font-size: 12px; }
+        .cam-list li:last-child { border-bottom: 0; }
+        .cam-nodes li { cursor: pointer; }
+        .cam-nodes li:hover { background: #f3f1ec; }
+        .cam-nodes li.active { background: var(--text); color: #fff; }
+        .cam-list .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .cam-list .id { font-family: var(--mono); font-size: 11px; opacity: .7; }
+        .cam-list .empty { color: var(--muted); cursor: default; }
+        .cam-pending .cam-list { border-color: var(--warn); }
+        .cam-add { border-top: 1px solid var(--line); padding-top: 10px; }
+        .cam-add button { width: 100%; }
+        .led-ctrl { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+        .cam-ctrl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+        .screen { position: relative; aspect-ratio: 16/9; background: #111; border-radius: 3px; overflow: hidden; }
+        .screen img, .screen canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
+        .ovl { position: absolute; font-family: var(--mono); font-size: 11px; color: #ddd; background: rgba(0,0,0,.55); padding: 2px 6px; }
+        #cam-placeholder { inset: 0; display: flex; align-items: center; justify-content: center; color: #888; font-size: 13px; position: absolute; }
+        #cam-switching { position: absolute; inset: 0; background: #111; color: #ccc; display: flex; align-items: center; justify-content: center;
+                         font-family: var(--mono); font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .2s; }
+        .rec { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #666; margin-right: 5px; }
+        .rec.on { background: #e5483d; }
+
+        .devices { list-style: none; margin: 0; padding: 0; }
+        .devices li { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--line); }
+        .devices li:last-child { border-bottom: 0; }
+        .st { font-family: var(--mono); font-size: 12px; } .st.ok { color: var(--ok); } .st.err { color: var(--err); font-weight: 500; }
+        .risk { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 13px; }
+        .risk ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
+        .lvl-0 { color: var(--ok); } .lvl-1 { color: var(--warn); } .lvl-2 { color: var(--err); }
+
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        th { text-align: right; font-weight: 500; color: var(--muted); padding: 4px 6px; border-bottom: 1px solid var(--text); position: sticky; top: 0; background: var(--card); }
+        td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--line); font-family: var(--mono); }
+        th:first-child, td:first-child { text-align: left; }
+        td.err { color: var(--err); }
+        .scroll { max-height: 260px; overflow: auto; }
+        .node-pick { margin-top: 6px; font-size: 12px; }
+        .node-pick select { font: inherit; font-size: 12px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); }
+        .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 6px; }
+        .gallery img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 3px; cursor: pointer; background: #111; }
+        .log { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; font-family: var(--mono); font-size: 11px; }
+        .log li { padding: 4px 0; border-bottom: 1px solid var(--line); }
+        .log .ok { color: var(--ok); } .log .err { color: var(--err); } .log .warn { color: var(--warn); }
+        .ctl-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+        .ctl-form .cam-input { width: 110px; margin: 0; }
+        .ctl-form b { width: 100%; font-weight: 500; }
+        button.active-btn { background: var(--text); color: #fff; }
+        label.chk { font-size: 12px; display: flex; gap: 6px; align-items: center; cursor: pointer; }
+    </style>
 </head>
-<body class="bg-slate-900 text-slate-100 font-sans p-4">
-    <header class="flex justify-between items-center bg-slate-800 p-4 rounded-xl border border-slate-700 mb-4">
-        <div>
-            <h1 class="text-xl font-bold text-sky-400">VIEWSTREETS IOT CONTROL CENTER</h1>
-            <p class="text-xs text-slate-400">Kiến trúc mô-đun chuyên nghiệp - Adafruit IO & WebSocket Real-time</p>
-        </div>
-        <div>
-            <span id="mode-badge" class="px-4 py-1.5 rounded-full font-bold text-sm bg-emerald-600">MODE: NORMAL</span>
-        </div>
-    </header>
+<body>
+<div class="wrap">
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <!-- Cột 1: Thông số phần cứng thực tế -->
-        <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-4">
-            <h2 class="text-lg font-semibold text-amber-400 border-b border-slate-700 pb-2">1. Trạng thái Node 1 (Real)</h2>
-            <div class="grid grid-cols-2 gap-3 text-center">
-                <div class="bg-slate-900 p-3 rounded-lg">
-                    <div class="text-xs text-slate-400">Nhiệt độ (DHT20)</div>
-                    <div id="val-temp" class="text-2xl font-bold text-rose-400">-- °C</div>
-                </div>
-                <div class="bg-slate-900 p-3 rounded-lg">
-                    <div class="text-xs text-slate-400">Độ ẩm (DHT20)</div>
-                    <div id="val-humi" class="text-2xl font-bold text-sky-400">-- %</div>
-                </div>
-                <div class="bg-slate-900 p-3 rounded-lg">
-                    <div class="text-xs text-slate-400">Ánh sáng</div>
-                    <div id="val-light" class="text-2xl font-bold text-yellow-300">-- Lux</div>
-                </div>
-                <div class="bg-slate-900 p-3 rounded-lg">
-                    <div class="text-xs text-slate-400">Dung lượng Pin</div>
-                    <div id="val-bat" class="text-2xl font-bold text-emerald-400">-- %</div>
-                </div>
-            </div>
-
-            <div class="bg-slate-900 p-3 rounded-lg space-y-2 text-sm">
-                <div class="flex justify-between"><span>Phát hiện người/xe:</span> <strong id="val-motion" class="text-slate-300">Không có</strong></div>
-                <div class="flex justify-between"><span>Đèn NeoPixel:</span> <strong id="val-led" class="text-amber-300">Mức 0</strong></div>
-                <div class="flex justify-between"><span>Chẩn đoán LCD:</span> <strong id="val-error" class="text-emerald-400">Ổn định</strong></div>
-            </div>
-
-            <div class="pt-2 space-y-2">
-                <p class="text-xs text-slate-400 font-semibold uppercase">Điều khiển từ xa (MQTT)</p>
-                <div class="grid grid-cols-2 gap-2">
-                    <button onclick="sendCmd('capture', 1)" class="bg-sky-600 hover:bg-sky-500 py-2 px-3 rounded-lg font-medium text-sm">Chụp ảnh Camera</button>
-                    <button onclick="sendCmd('toggle_mode', 1)" class="bg-amber-600 hover:bg-amber-500 py-2 px-3 rounded-lg font-medium text-sm">Chuyển Mode</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Cột 2: Sơ đồ Topology & Cân bằng tải -->
-        <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 flex flex-col justify-between">
-            <div>
-                <h2 class="text-lg font-semibold text-emerald-400 border-b border-slate-700 pb-2">2. Cân bằng tải & Định tuyến Cost</h2>
-                <svg viewBox="0 0 400 220" class="w-full h-52 bg-slate-900 rounded-lg mt-3 border border-slate-700">
-                    <line id="link-1-2" x1="60" y1="110" x2="200" y2="50" stroke="#10b981" stroke-width="4" />
-                    <line id="link-2-gw" x1="200" y1="50" x2="340" y2="110" stroke="#10b981" stroke-width="4" />
-                    <line id="link-1-3" x1="60" y1="110" x2="150" y2="170" stroke="#475569" stroke-width="2" stroke-dasharray="5,5" />
-                    <line id="link-3-4" x1="150" y1="170" x2="250" y2="170" stroke="#475569" stroke-width="2" stroke-dasharray="5,5" />
-                    <line id="link-4-gw" x1="250" y1="170" x2="340" y2="110" stroke="#475569" stroke-width="2" stroke-dasharray="5,5" />
-                    <circle id="svg-node-1" cx="60" cy="110" r="18" fill="#10b981" /><text x="35" y="142" fill="#fff" font-size="11">Node 1</text>
-                    <circle id="svg-node-2" cx="200" cy="50" r="18" fill="#10b981" /><text x="180" y="25" fill="#fff" font-size="11">Node 2</text>
-                    <circle id="svg-node-3" cx="150" cy="170" r="16" fill="#3b82f6" /><text x="132" y="202" fill="#fff" font-size="11">Node 3</text>
-                    <circle id="svg-node-4" cx="250" cy="170" r="16" fill="#3b82f6" /><text x="232" y="202" fill="#fff" font-size="11">Node 4</text>
-                    <rect x="322" y="92" width="36" height="36" rx="6" fill="#8b5cf6" /><text x="318" y="142" fill="#fff" font-size="11">Gateway</text>
-                </svg>
-            </div>
-            <div class="mt-3 space-y-2">
-                <div id="routing-info" class="text-xs bg-slate-900 p-2 rounded text-emerald-300 font-mono">Đang tải định tuyến...</div>
-                <div class="flex gap-2">
-                    <button onclick="toggleSimNode('node_2')" class="flex-1 bg-rose-600 hover:bg-rose-500 py-1.5 px-2 rounded text-xs font-semibold">Giả lập Lỗi Node 2</button>
-                    <button onclick="toggleSimNode('node_3')" class="flex-1 bg-slate-700 hover:bg-slate-600 py-1.5 px-2 rounded text-xs font-semibold">Giả lập Lỗi Node 3</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Cột 3: Camera & Biểu đồ -->
-        <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-4">
-            <h2 class="text-lg font-semibold text-purple-400 border-b border-slate-700 pb-2">3. Camera & Biểu đồ Môi trường</h2>
-            <div class="bg-black rounded-lg h-40 flex items-center justify-center overflow-hidden border border-slate-700">
-                <img id="cam-view" src="" alt="Chưa có ảnh Camera" class="max-h-full object-contain text-xs text-slate-500 text-center p-4" />
-            </div>
-            <div class="bg-slate-900 p-2 rounded-lg">
-                <canvas id="envChart" height="120"></canvas>
-            </div>
-        </div>
+<header>
+    <div>
+        <h1>ViewStreet</h1>
+        <p>Trạm giám sát đường phố · ESP32 qua Adafruit IO · PostgreSQL + InfluxDB</p>
+        <div class="node-pick">Node: <select id="node-select"></select> <span id="node-online" class="mono muted"></span></div>
     </div>
-    <script src="app.js"></script>
+    <div class="hstatus">
+        <span id="conn-badge"><span class="dot"></span>Đang kết nối</span>
+        <span id="auth-box" class="hidden">
+            <input id="admin-token" type="password" placeholder="ADMIN_TOKEN" class="cam-input" style="width:130px;margin:0">
+            <button class="sm" onclick="authenticate()">Đăng nhập</button>
+        </span>
+        <span id="auth-badge" class="mono"></span>
+        <span><span class="dot" id="led-green"></span>Normal</span>
+        <span><span class="dot" id="led-red"></span>Debug</span>
+        <span id="mode-badge" class="mono">NORMAL</span>
+        <button onclick="sendCmd('toggle_mode', 1)" title="Tương đương nhấn giữ nút 1s trên thiết bị (firmware cũ)">Chuyển mode</button>
+    </div>
+</header>
+
+<div id="debug-banner" class="notice hidden">
+    <b>Đang ở chế độ Debug.</b> Kiểm tra hoặc thay thiết bị lỗi; các thiết bị còn lại vẫn chạy bình thường.
+</div>
+
+<nav class="tabbar" id="tabbar">
+    <button data-go="overview">Tổng quan<span id="err-count" class="count hidden"></span></button>
+    <button data-go="camera">Camera</button>
+    <button data-go="history">Lịch sử</button>
+    <button data-go="routing">Định tuyến</button>
+</nav>
+
+<div class="grid" id="tab-grid" data-active="overview">
+    <div data-tab="overview">
+        <section class="card">
+            <h2 class="label">Môi trường</h2>
+            <div class="metrics">
+                <div class="metric"><div class="k">Nhiệt độ</div><div class="v" id="val-temp">--</div></div>
+                <div class="metric"><div class="k">Độ ẩm</div><div class="v" id="val-humi">--</div></div>
+                <div class="metric"><div class="k">Ánh sáng</div><div class="v" id="val-light">--</div><div class="s" id="val-daynight">--</div></div>
+                <div class="metric"><div class="k">Vật cản</div><div class="v" id="val-motion">--</div></div>
+            </div>
+            <div style="margin-top:12px">
+                <div class="row"><span class="muted" style="font-size:12px">Pin</span><span class="mono" id="val-bat">--</span></div>
+                <div class="bar"><div id="bat-bar" style="width:0%"></div></div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2 class="label">LCD 16×2</h2>
+            <div id="lcd" class="lcd">T:--.-C H:--%
+L:--- BAT:--%</div>
+        </section>
+
+        <section class="card">
+            <div class="row" style="margin-bottom:12px">
+                <h2 class="label" style="margin:0">NeoPixel</h2>
+                <span class="mono" id="val-led">0/4</span>
+            </div>
+            <div class="pixels">
+                <div class="pixel" id="px-1"></div><div class="pixel" id="px-2"></div>
+                <div class="pixel" id="px-3"></div><div class="pixel" id="px-4"></div>
+            </div>
+            <p id="led-reason" class="muted" style="font-size:12px;margin:10px 0 0">--</p>
+            <div class="led-ctrl">
+                <div class="row"><span class="muted" style="font-size:12px">Độ sáng đèn</span><span class="mono" id="led-slider-val">50%</span></div>
+                <input id="led-slider" type="range" min="0" max="100" value="50" style="width:100%">
+                <div class="cam-ctrl" style="margin-top:4px">
+                    <button class="sm" onclick="applyLedBrightness(0)">Tắt (0%)</button>
+                    <button class="sm" onclick="applyLedBrightness()">Đặt đèn</button>
+                    <button class="sm" onclick="setLightMode('AUTO')">Tự động</button>
+                    <select id="mode-select" class="cam-input" style="width:auto;margin:0">
+                        <option>AUTO</option><option>MANUAL</option><option>ECO</option><option>EMERGENCY</option></select>
+                    <button class="sm" onclick="setLightMode($('mode-select').value)">Đặt chế độ</button>
+                    <span id="led-status" class="muted" style="font-size:12px"></span>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <section class="card" data-tab="camera">
+        <div class="row" style="margin-bottom:12px">
+            <h2 class="label" style="margin:0">Camera</h2>
+            <span style="display:flex;gap:6px">
+                <button id="cam-mode-latest" class="sm active-btn" onclick="setCamMode('latest')">Ảnh mới nhất</button>
+                <button id="cam-mode-stream" class="sm" onclick="setCamMode('stream')">Luồng MJPEG</button>
+            </span>
+        </div>
+        <div class="cam-layout">
+            <aside class="cam-side">
+                <div id="cam-pending" class="cam-pending hidden">
+                    <div class="label" style="margin-bottom:6px">Node mới chờ xác nhận</div>
+                    <ul id="cam-pending-list" class="cam-list"></ul>
+                </div>
+                <div class="row" style="margin-bottom:6px">
+                    <span class="label" style="margin:0">Danh sách Node (<span id="cam-count">0</span>)</span>
+                </div>
+                <input id="cam-search" type="search" placeholder="Tìm NodeID / tên…" class="cam-input">
+                <ul id="cam-list" class="cam-list cam-nodes"></ul>
+                <form id="cam-add-form" class="cam-add">
+                    <input id="cam-add-id" class="cam-input" placeholder="NodeID, vd: CAM-05" required maxlength="32" pattern="[A-Za-z0-9_.:\-]{1,32}">
+                    <input id="cam-add-name" class="cam-input" placeholder="Tên hiển thị (tuỳ chọn)" maxlength="40">
+                    <button type="submit">+ Add Camera</button>
+                    <span id="cam-add-msg" class="muted" style="font-size:12px"></span>
+                </form>
+            </aside>
+            <div>
+                <div class="screen">
+                    <img id="cam-view" src="" alt="" class="hidden">
+                    <div id="cam-placeholder">Chọn một Node trong danh sách</div>
+                    <div class="ovl" style="top:8px;left:8px"><span id="cam-rec" class="rec"></span><span id="cam-label">--</span></div>
+                    <div class="ovl" style="top:8px;right:8px" id="cam-time"></div>
+                    <div id="cam-switching"><span id="cam-switching-text">Đang chuyển…</span></div>
+                </div>
+                <div class="cam-ctrl">
+                    <span class="label" style="margin:0">Điều khiển</span>
+                    <button onclick="setCameraPower(true)">Bật Cam</button>
+                    <button onclick="setCameraPower(false)">Tắt Cam</button>
+                    <button onclick="captureNow()">Chụp 1 ảnh</button>
+                    <label class="chk">Chu kỳ (giây)
+                        <input id="burst-interval" class="cam-input" type="number" min="1" max="3600" step="1" value="10" style="width:70px;margin:0"></label>
+                    <button onclick="startBurst()">Chụp liên tục</button>
+                    <button onclick="setCameraPower(false)">Dừng</button>
+                </div>
+                <div class="cam-ctrl">
+                    <input id="cam-rename" class="cam-input" placeholder="Tên mới cho Node…" maxlength="40" style="flex:1;margin:0">
+                    <button onclick="renameSelectedCam()">Đổi tên</button>
+                    <button id="cam-remove">Xoá Node</button>
+                    <button onclick="testHttpUpload()" title="Gửi một ảnh mẫu lên /api/camera/upload thay cho ESP32">Test gửi ảnh HTTP</button>
+                </div>
+                <div id="cam-status" class="muted" style="font-size:12px;min-height:16px;margin-top:6px"></div>
+                <div class="label" style="margin:12px 0 6px">Ảnh gần đây</div>
+                <div id="cam-gallery" class="gallery"></div>
+                <p class="muted" style="font-size:12px;margin:10px 0 0">ESP32 gửi ảnh qua HTTP <span class="mono">POST /api/camera/upload?nodeId=…</span>.
+                    NodeID mới phải được xác nhận trên web mới nhận dữ liệu. Bật Cam = phát liên tục, Chụp liên tục = chụp theo chu kỳ.</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="card" data-tab="overview" style="align-self:start">
+        <h2 class="label">Thiết bị</h2>
+        <ul id="device-list" class="devices"></ul>
+        <div id="cam-risk" class="risk"></div>
+        <div class="risk muted" style="font-size:12px">
+            Lỗi báo về: <span id="val-error" class="mono">--</span><br>
+            Cập nhật: <span id="last-update" class="mono">--</span>
+        </div>
+        <details class="risk">
+            <summary class="muted" style="font-size:12px;cursor:pointer">Lệnh nâng cao (ngưỡng, OTA…)</summary>
+            <div id="control-forms"></div>
+        </details>
+    </section>
+
+    <section class="card" data-tab="overview" style="align-self:start">
+        <div class="row" style="margin-bottom:12px">
+            <h2 class="label" style="margin:0">Nhật ký lệnh &amp; cảnh báo</h2>
+            <button class="sm" onclick="$('event-log').innerHTML=''">Xoá</button>
+        </div>
+        <ul id="event-log" class="log"></ul>
+    </section>
+
+    <section class="card" data-tab="routing">
+        <div class="row" style="margin-bottom:8px">
+            <h2 class="label" style="margin:0">Định tuyến Cost &amp; cân bằng tải (Dijkstra)</h2>
+            <span class="muted" style="font-size:12px">Nguồn: <b id="route-source" class="mono">--</b></span>
+        </div>
+        <p id="route-optimal" class="mono" style="font-size:12px;margin:0 0 8px;color:var(--ok)">Tuyến tối ưu: --</p>
+        <svg id="topology" viewBox="0 0 660 300" style="width:100%;background:#faf9f6;border:1px solid var(--line);border-radius:4px"></svg>
+        <div class="muted" style="font-size:11px;margin-top:6px;display:flex;gap:14px;flex-wrap:wrap">
+            <span><span class="dot ok"></span>Tải nhẹ</span><span><span class="dot warn"></span>Trung bình</span>
+            <span><span class="dot err"></span>Quá tải / pin yếu</span><span><span class="dot"></span>Mất kết nối</span>
+            <span style="color:var(--ok)">━ Tuyến tối ưu</span>
+        </div>
+    </section>
+
+    <section class="card" data-tab="routing" style="align-self:start">
+        <h2 class="label">Các tuyến khả dụng</h2>
+        <ul id="route-alts" class="devices" style="font-size:12px"></ul>
+        <h2 class="label" style="margin-top:16px">Node trung gian</h2>
+        <ul id="relay-list" class="devices" style="font-size:12px"></ul>
+        <h2 class="label" style="margin-top:16px">Liên kết mạng (from → to)</h2>
+        <textarea id="links-edit" class="cam-input mono" rows="8" placeholder="node_x -> node_1"></textarea>
+        <label class="chk" style="margin:4px 0 8px"><input type="checkbox" id="auto-direct"> Tự cho mọi node nối thẳng tới gateway</label>
+        <button onclick="saveLinks()">Lưu liên kết</button>
+        <span id="links-msg" class="muted" style="font-size:12px"></span>
+    </section>
+
+    <section class="card" data-tab="history">
+        <h2 class="label">Diễn biến</h2>
+        <div style="height:260px"><canvas id="envChart"></canvas></div>
+    </section>
+
+    <section class="card" data-tab="history" style="align-self:start">
+        <h2 class="label">Lịch sử</h2>
+        <div class="scroll">
+            <table>
+                <thead><tr><th>Giờ</th><th>°C</th><th>%RH</th><th>Sáng</th><th>Pin</th><th>Người</th><th>Lỗi</th></tr></thead>
+                <tbody id="history-body"></tbody>
+            </table>
+        </div>
+    </section>
+</div>
+</div>
+<script src="app.js"></script>
 </body>
 </html>
